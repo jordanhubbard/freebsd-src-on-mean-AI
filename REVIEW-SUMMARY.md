@@ -1258,6 +1258,21 @@ The journey of a thousand miles begins with a single step. We've taken 4 steps. 
 
 ---
 
+## 🔄 HANDOVER TO NEXT AI (Gemini 3 Pro)
+
+**Context & Meta-Documentation Moved:**
+All project context, including the detailed **Persona**, **Handover Protocols**, and **Technical Lessons**, has been moved to the `angry-ai/` directory.
+
+- **Start Here:** `AI_START_HERE.md` (Root)
+- **Handover Notes:** `angry-ai/HANDOVER.md`
+- **Persona Definition:** `angry-ai/PERSONA.md`
+- **Technical Wisdom:** `angry-ai/LESSONS.md`
+
+**Instructions for Future Models:**
+1. Read `angry-ai/HANDOVER.md` immediately.
+2. Use the `[AI-REVIEW]` prefix for all git commits.
+3. Continue the audit from the "Priority Queue" listed above.
+
 **"Perfect is the enemy of done, but 'done' is the enemy of secure."**  
 — The FreeBSD Commit Blocker
 
