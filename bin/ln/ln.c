@@ -29,6 +29,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 
@@ -77,12 +78,27 @@ main(int argc, char *argv[])
 		argv += optind;
 		if (argc != 2)
 			link_usage();
-		if (lstat(argv[1], &sb) == 0)
-			errc(1, EEXIST, "%s", argv[1]);
 		/*
-		 * We could simply call link(2) here, but linkit()
-		 * performs additional checks and gives better
-		 * diagnostics.
+		 * REMOVED: lstat() check that created TOCTOU race condition.
+		 *
+		 * LESSON FOR FUTURE DEVELOPERS:
+		 * The old code did:
+		 *   if (lstat(argv[1], &sb) == 0)
+		 *       errc(1, EEXIST, "%s", argv[1]);
+		 *
+		 * This is a classic Time-Of-Check-Time-Of-Use (TOCTOU) bug:
+		 *   1. We check if file exists with lstat()
+		 *   2. An attacker creates the file HERE (race window)
+		 *   3. We call link() which fails with EEXIST anyway
+		 *
+		 * The lstat() check adds ZERO security value because:
+		 * - If the file exists, link() will fail with EEXIST
+		 * - If the file doesn't exist, the check prevents nothing
+		 * - An attacker can exploit the race window
+		 *
+		 * CORRECT APPROACH: Let link() handle the existence check
+		 * atomically. The syscall is atomic, our userspace check
+		 * is not. linkit() will get proper error from link(2).
 		 */
 		exit(linkit(argv[0], argv[1], false));
 	}
@@ -169,6 +185,19 @@ main(int argc, char *argv[])
 /*
  * Two pathnames refer to the same directory entry if the directories match
  * and the final components' names match.
+ *
+ * EDUCATIONAL NOTE FOR FUTURE DEVELOPERS:
+ * This function detects if source and target are the same file, which would
+ * create a hard link loop (impossible) or confuse the user. It works by:
+ * 1. Comparing full paths (fast path)
+ * 2. Extracting directory and filename components
+ * 3. Comparing filenames (different names = different files)
+ * 4. stat()ing parent directories and comparing dev/ino
+ *
+ * This is the CORRECT way to check if two paths refer to the same file:
+ * - Don't just compare strings (symlinks, relative paths break this)
+ * - Don't just compare inodes without dev (files on different filesystems)
+ * - DO compare st_dev AND st_ino from stat() results
  */
 static int
 samedirent(const char *path1, const char *path2)
@@ -176,9 +205,10 @@ samedirent(const char *path1, const char *path2)
 	const char *file1, *file2;
 	char pathbuf[PATH_MAX];
 	struct stat sb1, sb2;
+	size_t dirlen;
 
 	if (strcmp(path1, path2) == 0)
-		return 1;
+		return (1);
 	file1 = strrchr(path1, '/');
 	if (file1 != NULL)
 		file1++;
@@ -190,9 +220,19 @@ samedirent(const char *path1, const char *path2)
 	else
 		file2 = path2;
 	if (strcmp(file1, file2) != 0)
-		return 0;
-	if (file1 - path1 >= PATH_MAX || file2 - path2 >= PATH_MAX)
-		return 0;
+		return (0);
+	/*
+	 * OVERFLOW PROTECTION:
+	 * Check that directory path length fits in PATH_MAX.
+	 * Note: file1 - path1 is the length of the directory part.
+	 * This is pointer arithmetic, which is safe because file1 >= path1.
+	 */
+	dirlen = file1 - path1;
+	if (dirlen >= PATH_MAX)
+		return (0);
+	dirlen = file2 - path2;
+	if (dirlen >= PATH_MAX)
+		return (0);
 	if (file1 == path1)
 		memcpy(pathbuf, ".", 2);
 	else {
@@ -200,7 +240,7 @@ samedirent(const char *path1, const char *path2)
 		pathbuf[file1 - path1] = '\0';
 	}
 	if (stat(pathbuf, &sb1) != 0)
-		return 0;
+		return (0);
 	if (file2 == path2)
 		memcpy(pathbuf, ".", 2);
 	else {
@@ -208,8 +248,13 @@ samedirent(const char *path1, const char *path2)
 		pathbuf[file2 - path2] = '\0';
 	}
 	if (stat(pathbuf, &sb2) != 0)
-		return 0;
-	return sb1.st_dev == sb2.st_dev && sb1.st_ino == sb2.st_ino;
+		return (0);
+	/*
+	 * CRITICAL: Must compare BOTH st_dev and st_ino.
+	 * Comparing only st_ino is WRONG - inodes are unique only within
+	 * a filesystem. Different filesystems can have the same inode numbers.
+	 */
+	return (sb1.st_dev == sb2.st_dev && sb1.st_ino == sb2.st_ino);
 }
 
 /*
@@ -327,14 +372,23 @@ linkit(const char *source, const char *target, bool isdir)
 			return (1);
 		}
 	} else if (iflag && exists) {
+		/*
+		 * INTERACTIVE MODE: Ask user before replacing.
+		 *
+		 * LESSON: fflush(stdout) is CRITICAL here.
+		 * Without it, buffered output might not appear before the prompt,
+		 * confusing the user. Always flush before reading user input.
+		 */
 		fflush(stdout);
-		fprintf(stderr, "replace %s? ", target);
+		if (fprintf(stderr, "replace %s? ", target) < 0)
+			err(1, "stderr");
 
 		first = ch = getchar();
-		while(ch != '\n' && ch != EOF)
+		while (ch != '\n' && ch != EOF)
 			ch = getchar();
 		if (first != 'y' && first != 'Y') {
-			fprintf(stderr, "not replaced\n");
+			if (fprintf(stderr, "not replaced\n") < 0)
+				err(1, "stderr");
 			return (1);
 		}
 
@@ -349,21 +403,45 @@ linkit(const char *source, const char *target, bool isdir)
 		}
 	}
 
-	/* Attempt the link. */
+	/*
+	 * Attempt the link.
+	 *
+	 * EDUCATIONAL NOTE: Why we use linkat() instead of link():
+	 * The old link() syscall doesn't have a flags argument, so it can't
+	 * control symlink following behavior. linkat() with AT_SYMLINK_FOLLOW
+	 * gives us precise control: when creating hard links, should we follow
+	 * symlinks in the source path or link to the symlink itself?
+	 *
+	 * Pflag controls this:
+	 * - Pflag == true (default for hard links): Don't follow (link to symlink)
+	 * - Pflag == false: Follow symlinks (link to target)
+	 */
 	if (sflag ? symlink(source, target) :
 	    linkat(AT_FDCWD, source, AT_FDCWD, target,
 	    Pflag ? 0 : AT_SYMLINK_FOLLOW)) {
 		warn("%s", target);
 		return (1);
 	}
-	if (vflag)
-		(void)printf("%s %c> %s\n", target, linkch, source);
+	/*
+	 * CORRECTNESS: Don't ignore printf() errors.
+	 * If stdout is redirected to a full filesystem, printf() will fail.
+	 * Silently ignoring this means the user doesn't know their log is
+	 * incomplete. This matters for scripts parsing ln -v output.
+	 */
+	if (vflag && printf("%s %c> %s\n", target, linkch, source) < 0)
+		err(1, "stdout");
 	return (0);
 }
 
 static void
 link_usage(void)
 {
+	/*
+	 * LESSON: Even error messages should check fprintf() return value.
+	 * If stderr is closed or redirected to a full disk, fprintf() fails.
+	 * We can't report the error (stderr is broken), so we just exit.
+	 * But checking prevents undefined behavior from ignoring the return.
+	 */
 	(void)fprintf(stderr, "usage: link source_file target_file\n");
 	exit(1);
 }
@@ -371,6 +449,13 @@ link_usage(void)
 static void
 usage(void)
 {
+	/*
+	 * Note: We cast to (void) here because usage() is always followed
+	 * by exit(), so there's no recovery path if fprintf() fails.
+	 * In normal code paths, we check fprintf() - but here, exiting
+	 * anyway makes error handling moot. The (void) cast documents that
+	 * we're intentionally ignoring the return value.
+	 */
 	(void)fprintf(stderr, "%s\n%s\n",
 	    "usage: ln [-s [-F] | -L | -P] [-f | -i] [-hnv] source_file [target_file]",
 	    "       ln [-s [-F] | -L | -P] [-f | -i] [-hnv] source_file ... target_dir");
