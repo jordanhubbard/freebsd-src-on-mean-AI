@@ -27,12 +27,27 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
+static void usage(void) __dead2;
+
 int
-main(int argc __unused, char *argv[] __unused)
+main(int argc, char *argv[] __unused)
 {
+	if (argc > 1)
+		usage();
+
 	sync();
 	exit(0);
+}
+
+static void
+usage(void)
+{
+	(void)fprintf(stderr, "usage: sync\n");
+	exit(1);
 }

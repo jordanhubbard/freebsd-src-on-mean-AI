@@ -29,6 +29,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 
 #include <err.h>
@@ -66,8 +67,10 @@ main(int argc, char *argv[])
 			if (!qflag)
 				warn("%s", path);
 			rval = 1;
-		} else
-			(void)printf("%s\n", p);
+		} else {
+			if (printf("%s\n", p) < 0)
+				err(1, "stdout");
+		}
 	} while ((path = *argv++) != NULL);
 	exit(rval);
 }
@@ -75,7 +78,6 @@ main(int argc, char *argv[])
 static void
 usage(void)
 {
-
 	(void)fprintf(stderr, "usage: realpath [-q] [path ...]\n");
-  	exit(1);
+	exit(1);
 }

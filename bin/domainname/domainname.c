@@ -29,6 +29,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 
 #include <err.h>
@@ -64,6 +65,11 @@ main(int argc, char *argv[])
 	} else {
 		if (getdomainname(domainname, (int)sizeof(domainname)))
 			err(1, "getdomainname");
+		/*
+		 * getdomainname(3) does not guarantee null termination if the
+		 * name is truncated. Force it to be safe.
+		 */
+		domainname[MAXHOSTNAMELEN - 1] = '\0';
 		(void)printf("%s\n", domainname);
 	}
 	exit(0);
