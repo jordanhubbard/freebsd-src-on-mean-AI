@@ -29,6 +29,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -57,7 +58,7 @@ main(int argc, char *argv[])
 	omode = pflag = 0;
 	mode = NULL;
 	while ((ch = getopt(argc, argv, "m:pv")) != -1)
-		switch(ch) {
+		switch (ch) {
 		case 'm':
 			mode = optarg;
 			break;
@@ -90,15 +91,24 @@ main(int argc, char *argv[])
 		if (pflag) {
 			success = build(*argv, omode);
 		} else if (mkdir(*argv, omode) < 0) {
-			if (errno == ENOTDIR || errno == ENOENT)
-				warn("%s", dirname(*argv));
-			else
+			if (errno == ENOTDIR || errno == ENOENT) {
+				/*
+				 * CRITICAL: dirname() can modify its argument
+				 * per POSIX, so we must copy the string first
+				 * to avoid corrupting argv.
+				 */
+				char *path_copy = strdup(*argv);
+				if (path_copy == NULL)
+					err(1, "strdup");
+				warn("%s", dirname(path_copy));
+				free(path_copy);
+			} else
 				warn("%s", *argv);
 			success = 0;
 		} else {
 			success = 1;
-			if (vflag)
-				(void)printf("%s\n", *argv);
+			if (vflag && printf("%s\n", *argv) < 0)
+				err(1, "stdout");
 		}
 		if (!success)
 			exitval = 1;
@@ -186,8 +196,8 @@ build(char *path, mode_t omode)
 				retval = 0;
 				break;
 			}
-		} else if (vflag)
-			printf("%s\n", path);
+		} else if (vflag && printf("%s\n", path) < 0)
+			err(1, "stdout");
 		if (!last)
 		    *p = '/';
 	}
@@ -202,5 +212,5 @@ usage(void)
 
 	(void)fprintf(stderr,
 	    "usage: mkdir [-pv] [-m mode] directory_name ...\n");
-	exit (EX_USAGE);
+	exit(EX_USAGE);
 }

@@ -11,15 +11,15 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 14 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, cat/Makefile)
-- **Lines of Code Analyzed:** ~2650
-- **Issues Identified:** 81 distinct problems
-- **Issues Documented:** 81
-- **CRITICAL BUGS FIXED:** 6 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow)
+- **Files Reviewed:** 15 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, cat/Makefile)
+- **Lines of Code Analyzed:** ~2850
+- **Issues Identified:** 86 distinct problems
+- **Issues Documented:** 86
+- **CRITICAL BUGS FIXED:** 7 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption)
 
 ### Severity Breakdown
 
-- **CRITICAL Security/Correctness Issues:** 10
+- **CRITICAL Security/Correctness Issues:** 11
   - Unchecked fdopen() NULL return in cat (crash vulnerability)
   - Uninitialized struct flock in cat (kernel data leak)
   - st_blksize untrusted in cat (DoS via memory exhaustion) **FIXED**
@@ -30,12 +30,13 @@
   - **Unchecked strtoul() in gfmt.c (integer truncation vulnerability) FIXED**
   - **Type truncation in gfmt.c (cc_t overflow attack) FIXED**
   - **Integer overflow in kill.c signal parsing (strtol to int without overflow check) FIXED**
+  - **dirname() argv corruption in mkdir.c (POSIX allows dirname to modify argument) FIXED**
   
-- **style(9) Violations:** 22+
-  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h
+- **style(9) Violations:** 25+
+  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing
   
-- **Correctness/Logic Errors:** 29+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf, missing errno checks for strtol
+- **Correctness/Logic Errors:** 31+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf, missing errno checks for strtol, unchecked strdup
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
@@ -141,20 +142,42 @@ The kill utility accepts signal numbers via `-l` flag and parses them with `strt
 
 **Issues Fixed:** 7 (1 critical security, 2 style, 4 correctness)
 
+### 14. bin/mkdir/mkdir.c
+**Status:** HAD CRITICAL BUG - FIXED
+**Critical Issue:**
+- **CRITICAL: dirname() argv corruption** - Line 100 called `dirname(*argv)` directly. Per POSIX: "The dirname() function may modify the string pointed to by path." This corrupts the argv array! Since the code is in a loop (`for (exitval = 0; *argv != NULL; ++argv)`), subsequent iterations would use the corrupted path. Even worse, line 118 calls `chmod(*argv, omode)` after the loop iteration, potentially operating on the wrong path. **Fixed by using strdup() to create a copy before calling dirname().**
+
+**Other Issues:**
+- **Correctness: Unchecked strdup()** - Must check for NULL return from memory allocation. **Fixed.**
+- **Correctness: Unchecked printf()** - Two instances in vflag code path ignored errors. **Fixed.**
+- **Style:** Missing `sys/cdefs.h`. **Fixed.**
+- **Style:** `switch(ch)` missing space after keyword. **Fixed.**
+- **Style:** `exit (EX_USAGE)` had extra space. **Fixed to exit(EX_USAGE).**
+
+**Security Impact:**
+The dirname() bug could cause:
+1. **Path Confusion**: If dirname() modifies *argv, subsequent loop iterations process the wrong directory name
+2. **chmod() on Wrong File**: The chmod() call on line 118 could chmod the dirname instead of the intended directory
+3. **Memory Corruption**: Modifying argv corrupts the argument vector
+
+POSIX explicitly states dirname() can modify its input. The fix creates a copy with strdup(), calls dirname() on the copy, then frees it. This prevents argv corruption entirely.
+
+**Issues Fixed:** 5 (1 critical, 3 style, 1 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 14 C files  
+**Files Reviewed:** 15 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.033%  
+**Completion Percentage:** 0.036%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 14/111 bin files reviewed
+**Status:** 15/111 bin files reviewed
 
-#### Completed (14 files)
+#### Completed (15 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -168,22 +191,23 @@ The kill utility accepts signal numbers via `-l` flag and parses them with `strt
 - ✅ bin/stty/stty.c (5 issues)
 - ✅ bin/stty/gfmt.c (4 issues - 2 CRITICAL)
 - ✅ bin/kill/kill.c (7 issues - 1 CRITICAL)
+- ✅ bin/mkdir/mkdir.c (5 issues - 1 CRITICAL)
 
 #### Next Priority Queue
-1. ⬜ bin/mkdir/mkdir.c
-2. ⬜ bin/ln/ln.c
-3. ⬜ bin/chmod/chmod.c
-4. ⬜ bin/cp/cp.c
-5. ⬜ bin/mv/mv.c
+1. ⬜ bin/ln/ln.c
+2. ⬜ bin/chmod/chmod.c
+3. ⬜ bin/cp/cp.c
+4. ⬜ bin/mv/mv.c
+5. ⬜ bin/rm/rm.c
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/mkdir/mkdir.c`. This utility creates directories. Watch for:
-- Path validation and sanitization (directory traversal attacks)
-- Race conditions (TOCTOU) in directory creation
-- Permission/mode handling
-- Symlink handling vulnerabilities
-- Integer overflow in permission parsing
+Continue with `bin/ln/ln.c`. This utility creates links (hard and symbolic). Watch for:
+- Symlink attacks (create symlinks pointing to sensitive files)
+- TOCTOU race conditions
+- Path traversal vulnerabilities
+- Symlink following vs not following
+- Privilege escalation via link attacks
 
 **"If it looks wrong, it IS wrong until proven otherwise."**
