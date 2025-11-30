@@ -33,6 +33,9 @@
  * as a builtin for /bin/sh (#define SHELL).
  */
 
+#include <sys/cdefs.h>
+#include <sys/types.h>
+
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
@@ -54,7 +57,7 @@ int
 main(int argc, char *argv[])
 {
 	char signame[SIG2STR_MAX];
-	long pidl;
+	long pidl, sigl;
 	pid_t pid;
 	int errors, numsig, ret;
 	char *ep;
@@ -72,14 +75,24 @@ main(int argc, char *argv[])
 		if (argc == 1) {
 			if (!isdigit(**argv))
 				usage();
-			numsig = strtol(*argv, &ep, 10);
-			if (!**argv || *ep)
+			/*
+			 * Parse signal number with overflow detection.
+			 * Same technique as PID parsing below.
+			 */
+			errno = 0;
+			sigl = strtol(*argv, &ep, 10);
+			if (errno == ERANGE || !**argv || *ep)
 				errx(2, "invalid signal number: %s", *argv);
+			/* Check for overflow when converting to int. */
+			numsig = (int)sigl;
+			if (numsig != sigl)
+				errx(2, "signal number out of range: %s", *argv);
 			if (numsig >= 128)
 				numsig -= 128;
 			if (sig2str(numsig, signame) < 0)
 				nosig(*argv);
-			printf("%s\n", signame);
+			if (printf("%s\n", signame) < 0)
+				err(1, "stdout");
 			return (0);
 		}
 		printsignals(stdout);
@@ -119,7 +132,10 @@ main(int argc, char *argv[])
 		else
 #endif
 		{
+			errno = 0;
 			pidl = strtol(*argv, &ep, 10);
+			if (errno == ERANGE)
+				errx(2, "process id out of range: %s", *argv);
 			/* Check for overflow of pid_t. */
 			pid = (pid_t)pidl;
 			if (!**argv || *ep || pid != pidl)
@@ -154,11 +170,15 @@ printsignals(FILE *fp)
 	int n;
 
 	for (n = 1; n < sys_nsig; n++) {
-		(void)fprintf(fp, "%s", sys_signame[n]);
-		if (n == (sys_nsig / 2) || n == (sys_nsig - 1))
-			(void)fprintf(fp, "\n");
-		else
-			(void)fprintf(fp, " ");
+		if (fprintf(fp, "%s", sys_signame[n]) < 0)
+			err(1, "fprintf");
+		if (n == (sys_nsig / 2) || n == (sys_nsig - 1)) {
+			if (fprintf(fp, "\n") < 0)
+				err(1, "fprintf");
+		} else {
+			if (fprintf(fp, " ") < 0)
+				err(1, "fprintf");
+		}
 	}
 }
 
@@ -166,11 +186,12 @@ static void
 usage(void)
 {
 
-	(void)fprintf(stderr, "%s\n%s\n%s\n%s\n",
-		"usage: kill [-s signal_name] pid ...",
-		"       kill -l [exit_status]",
-		"       kill -signal_name pid ...",
-		"       kill -signal_number pid ...");
+	if (fprintf(stderr, "%s\n%s\n%s\n%s\n",
+	    "usage: kill [-s signal_name] pid ...",
+	    "       kill -l [exit_status]",
+	    "       kill -signal_name pid ...",
+	    "       kill -signal_number pid ...") < 0)
+		err(1, "stderr");
 #ifdef SHELL
 	error(NULL);
 #else

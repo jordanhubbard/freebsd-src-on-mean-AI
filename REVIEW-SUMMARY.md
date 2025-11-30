@@ -11,15 +11,15 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 13 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, cat/Makefile)
-- **Lines of Code Analyzed:** ~2450
-- **Issues Identified:** 74 distinct problems
-- **Issues Documented:** 74
-- **CRITICAL BUGS FIXED:** 5 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul)
+- **Files Reviewed:** 14 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, cat/Makefile)
+- **Lines of Code Analyzed:** ~2650
+- **Issues Identified:** 81 distinct problems
+- **Issues Documented:** 81
+- **CRITICAL BUGS FIXED:** 6 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow)
 
 ### Severity Breakdown
 
-- **CRITICAL Security/Correctness Issues:** 9
+- **CRITICAL Security/Correctness Issues:** 10
   - Unchecked fdopen() NULL return in cat (crash vulnerability)
   - Uninitialized struct flock in cat (kernel data leak)
   - st_blksize untrusted in cat (DoS via memory exhaustion) **FIXED**
@@ -29,12 +29,13 @@
   - **getdomainname() buffer overrun in domainname (SECURITY BUG) FIXED**
   - **Unchecked strtoul() in gfmt.c (integer truncation vulnerability) FIXED**
   - **Type truncation in gfmt.c (cc_t overflow attack) FIXED**
+  - **Integer overflow in kill.c signal parsing (strtol to int without overflow check) FIXED**
   
-- **style(9) Violations:** 20+
-  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing
+- **style(9) Violations:** 22+
+  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h
   
-- **Correctness/Logic Errors:** 25+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf
+- **Correctness/Logic Errors:** 29+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf, missing errno checks for strtol
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
@@ -116,20 +117,44 @@ The gread() function parses terminal settings from user input. Before the fix, a
 
 All strtoul() calls now validate errno and check that values fit in their target types before assignment.
 
+### 13. bin/kill/kill.c
+**Status:** HAD CRITICAL SECURITY BUG - FIXED
+**Critical Issues:**
+- **SECURITY: Integer overflow in signal number parsing** - Line 78 used `numsig = strtol(*argv, &ep, 10);` which assigns a `long` to an `int` without overflow checking. An attacker could provide a huge number (e.g., "9999999999") that would overflow when assigned to `int`, causing undefined behavior. The PID parsing code (lines 135-141) correctly checks for overflow using `pid != pidl`, but the signal parsing didn't use the same protection. **Fixed.**
+- **Correctness: Missing errno check** - `strtol()` can set `errno = ERANGE` on overflow, but this was never checked in signal parsing. Added for both signal and PID parsing. **Fixed.**
+- **Correctness: Unchecked fprintf()** - Multiple `fprintf()` calls in `printsignals()` and `usage()` ignored errors. **Fixed.**
+- **Style:** Missing `sys/cdefs.h` and `sys/types.h`. **Fixed.**
+
+**Security Impact:**
+The kill utility accepts signal numbers via `-l` flag and parses them with `strtol()`. Before the fix:
+- Large signal numbers (> INT_MAX) would overflow when assigned to `int numsig`
+- This causes undefined behavior per C standard
+- Could lead to incorrect signals being sent or program crashes
+- Attack: `kill -l 9999999999` would overflow and pass garbage to `sig2str()`
+
+**Fix Applied:**
+- Added `long sigl` variable for signal parsing (same pattern as `pidl` for PIDs)
+- Check `errno == ERANGE` after `strtol()`
+- Validate `numsig == sigl` to detect overflow when converting to `int`
+- Clear error messages: "signal number out of range" vs "invalid signal number"
+- All `fprintf()` calls now checked, fail with `err(1, ...)` on error
+
+**Issues Fixed:** 7 (1 critical security, 2 style, 4 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 13 C files  
+**Files Reviewed:** 14 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.031%  
+**Completion Percentage:** 0.033%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 13/111 bin files reviewed
+**Status:** 14/111 bin files reviewed
 
-#### Completed (13 files)
+#### Completed (14 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -142,21 +167,23 @@ All strtoul() calls now validate errno and check that values fit in their target
 - ✅ bin/nproc/nproc.c (3 issues)
 - ✅ bin/stty/stty.c (5 issues)
 - ✅ bin/stty/gfmt.c (4 issues - 2 CRITICAL)
+- ✅ bin/kill/kill.c (7 issues - 1 CRITICAL)
 
 #### Next Priority Queue
-1. ⬜ bin/kill/kill.c (179 LOC)
-2. ⬜ bin/mkdir/mkdir.c
-3. ⬜ bin/ln/ln.c
-4. ⬜ bin/chmod/chmod.c
-5. ⬜ bin/cp/cp.c
+1. ⬜ bin/mkdir/mkdir.c
+2. ⬜ bin/ln/ln.c
+3. ⬜ bin/chmod/chmod.c
+4. ⬜ bin/cp/cp.c
+5. ⬜ bin/mv/mv.c
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/kill/kill.c`. This utility sends signals to processes and likely deals with PID parsing, signal name lookup, and privilege checking. Watch for:
-- Integer overflow in PID parsing
-- Signal number validation
-- Privilege escalation paths
-- Error handling for kill(2) system call
+Continue with `bin/mkdir/mkdir.c`. This utility creates directories. Watch for:
+- Path validation and sanitization (directory traversal attacks)
+- Race conditions (TOCTOU) in directory creation
+- Permission/mode handling
+- Symlink handling vulnerabilities
+- Integer overflow in permission parsing
 
 **"If it looks wrong, it IS wrong until proven otherwise."**
