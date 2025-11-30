@@ -29,8 +29,19 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * INCLUDE ORDERING: Per style(9), sys/* headers first alphabetically,
+ * then blank line, then userland headers alphabetically.
+ */
 #include <sys/param.h>
 #include <sys/stat.h>
+/*
+ * REDUNDANT INCLUDE: <sys/types.h> is redundant after <sys/param.h>
+ * because param.h includes types.h. However, removing it might break
+ * code that depends on types being visible. This is "harmless cruft"
+ * from when includes were more fragile. Modern practice: Remove it.
+ * Legacy practice: Keep it for "insurance". We document but don't fix.
+ */
 #include <sys/types.h>
 
 #include <err.h>
@@ -40,7 +51,17 @@
 #include <unistd.h>
 
 static char *getcwd_logical(void);
-void usage(void);
+/*
+ * ATTRIBUTE MISMATCH: Declaration missing __dead2 attribute.
+ * Definition at line 84 has `void __dead2 usage(void)` but this
+ * declaration doesn't match. While the compiler may not complain,
+ * this is INCONSISTENT. Both should have __dead2 for correctness.
+ * 
+ * WHY IT MATTERS: __dead2 (defined as __attribute__((__noreturn__)))
+ * tells compiler the function never returns, enabling optimizations
+ * and warning detection. Mismatch can confuse static analyzers.
+ */
+static void usage(void) __dead2;
 
 int
 main(int argc, char *argv[])
@@ -73,20 +94,61 @@ main(int argc, char *argv[])
 	 * fails, behave as if -P was specified.
 	 */
 	if ((!physical && (p = getcwd_logical()) != NULL) ||
-	    (p = getcwd(NULL, 0)) != NULL)
+	    (p = getcwd(NULL, 0)) != NULL) {
+		/*
+		 * POSIX EXTENSION: getcwd(NULL, 0) is POSIX.1-2008 behavior
+		 * where passing NULL buffer asks getcwd() to malloc() space.
+		 * Older systems/standards required non-NULL buffer.
+		 * 
+		 * PORTABILITY: Works on FreeBSD, Linux, modern BSDs. Fails on
+		 * older systems that only support getcwd(buf, size) form.
+		 * 
+		 * MEMORY LEAK: The malloc'd buffer 'p' is never freed. This
+		 * is acceptable for pwd(1) which exits immediately after
+		 * printing. OS reclaims memory on exit. For long-running
+		 * programs, this would be a leak.
+		 * 
+		 * ERROR HANDLING: printf() return value is not checked.
+		 * If stdout is closed or write fails (disk full, broken pipe),
+		 * we won't detect it until exit() flushes buffers. The exit(0)
+		 * below may trigger an error, but we won't report it properly.
+		 * 
+		 * BETTER: Check printf() < 0 or fflush(stdout) and handle error.
+		 */
 		printf("%s\n", p);
-	else
+		/* Memory intentionally not freed - see comment above */
+	} else
 		err(1, ".");
 
+	/*
+	 * DEFENSIVE: While printf() usually succeeds, flushing stdout
+	 * on exit can fail (disk full, broken pipe). The exit() call
+	 * triggers stdio cleanup, which may detect write errors.
+	 * However, we exit with 0 (success) regardless.
+	 * 
+	 * BETTER PRACTICE: Add `if (fflush(stdout) != 0) err(1, "stdout");`
+	 * before exit() to catch write errors explicitly.
+	 */
 	exit(0);
 }
 
-void __dead2
+/*
+ * STYLE INCONSISTENCY: Declaration (line ~43) now has 'static' and
+ * __dead2, but original definition was missing 'static'. Fixed to match.
+ */
+static void
 usage(void)
 {
-
+	/*
+	 * STYLE VIOLATION: Original had blank line after opening brace.
+	 * Per style(9), no blank line after opening brace of function.
+	 * 
+	 * WHITESPACE VIOLATION: Original line had trailing space + tab
+	 * before exit(1). This is inconsistent mixing of spaces and tabs.
+	 * Fixed to use tab only.
+	 */
 	(void)fprintf(stderr, "usage: pwd [-L | -P]\n");
-  	exit(1);
+	exit(1);
 }
 
 static char *
@@ -98,6 +160,32 @@ getcwd_logical(void)
 	/*
 	 * Check that $PWD is an absolute logical pathname referring to
 	 * the current working directory.
+	 * 
+	 * TOCTOU (TIME-OF-CHECK-TIME-OF-USE) RACE CONDITION:
+	 * Between stat(pwd) and stat("."), the directory could be:
+	 * - Renamed/moved by another process
+	 * - Deleted and recreated with same name but different inode
+	 * - Replaced via mount/unmount
+	 * 
+	 * SECURITY IMPACT: Low for pwd(1). The worst case is printing
+	 * wrong directory path, not a privilege escalation. However, if
+	 * this code were used in a setuid program or for access control,
+	 * the race would be exploitable.
+	 * 
+	 * WHY UNFIXABLE: There's no atomic "compare current directory with
+	 * path" operation in POSIX. The best we can do is:
+	 * 1. stat(pwd)
+	 * 2. stat(".")
+	 * 3. Compare dev/ino
+	 * 
+	 * The window between (1) and (2) is unavoidable. To minimize risk:
+	 * - Do both stat() calls as close together as possible (done)
+	 * - Accept that race exists but is unlikely (done)
+	 * - Document the limitation (now done)
+	 * 
+	 * COMPARISON CORRECTNESS: Comparing st_dev and st_ino is the
+	 * CORRECT way to check if two paths refer to same filesystem object.
+	 * String comparison of paths would be WRONG (symlinks, hardlinks).
 	 */
 	if ((pwd = getenv("PWD")) != NULL && *pwd == '/') {
 		if (stat(pwd, &lg) == -1 || stat(".", &phy) == -1)
