@@ -11,15 +11,15 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 11 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, cat/Makefile)
-- **Lines of Code Analyzed:** ~2200
-- **Issues Identified:** 64 distinct problems
-- **Issues Documented:** 64
-- **CRITICAL BUGS FIXED:** 3 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation)
+- **Files Reviewed:** 13 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, cat/Makefile)
+- **Lines of Code Analyzed:** ~2450
+- **Issues Identified:** 74 distinct problems
+- **Issues Documented:** 74
+- **CRITICAL BUGS FIXED:** 5 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul)
 
 ### Severity Breakdown
 
-- **CRITICAL Security/Correctness Issues:** 7
+- **CRITICAL Security/Correctness Issues:** 9
   - Unchecked fdopen() NULL return in cat (crash vulnerability)
   - Uninitialized struct flock in cat (kernel data leak)
   - st_blksize untrusted in cat (DoS via memory exhaustion) **FIXED**
@@ -27,19 +27,21 @@
   - Missing short-write handling in echo (DATA CORRUPTION bug) **UNFIXED**
   - **gethostname() buffer overrun in hostname (SECURITY BUG) FIXED**
   - **getdomainname() buffer overrun in domainname (SECURITY BUG) FIXED**
+  - **Unchecked strtoul() in gfmt.c (integer truncation vulnerability) FIXED**
+  - **Type truncation in gfmt.c (cc_t overflow attack) FIXED**
   
-- **style(9) Violations:** 15+
-  - Include ordering, whitespace, lying comments, indentation, function prototypes
+- **style(9) Violations:** 20+
+  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing
   
-- **Correctness/Logic Errors:** 20+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types
+- **Correctness/Logic Errors:** 25+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
   - Missing dependencies
   
 - **Code Quality Issues:** 10+
-  - Unsafe macro usage, unclear idioms, legacy cruft, inadequate comments
+  - Unsafe macro usage, unclear idioms, legacy cruft, inadequate comments, magic numbers
 
 ### Key Accomplishments
 
@@ -89,20 +91,45 @@
 - **Unchecked printf:** Added error check. **Fixed.**
 - **Style:** Missing sys/cdefs.h. **Fixed.**
 
+### 11. bin/stty/stty.c
+**Status:** ACCEPTABLE (with fixes)
+**Issues:**
+- **Style:** Missing sys/cdefs.h (should be first include). **Fixed.**
+- **Style:** `switch(ch)` and `switch(fmt)` missing space after keyword. **Fixed.**
+- **Style:** `usage()` had `exit (1)` instead of `exit(1)`. **Fixed.**
+- **Correctness:** tcsetattr() called with magic number `0` instead of `TCSANOW`. **Fixed.**
+- **Correctness:** Improved error message for speed parsing. **Fixed.**
+
+### 12. bin/stty/gfmt.c
+**Status:** HAD CRITICAL SECURITY BUGS - FIXED
+**Critical Issues:**
+- **SECURITY: Unchecked strtoul()** - Values from untrusted input assigned without error checking. **Fixed.**
+- **SECURITY: Integer truncation** - unsigned long values assigned to smaller types (tcflag_t, cc_t, speed_t) without bounds validation. An attacker could provide 0xFFFFFFFF which would be silently truncated when assigned to cc_t (unsigned char). **Fixed with explicit range checks.**
+- **Correctness:** Unchecked printf() calls. **Fixed.**
+- **Style:** Missing sys/cdefs.h, errno.h, limits.h. **Fixed.**
+
+**Security Impact:**
+The gread() function parses terminal settings from user input. Before the fix, an attacker could:
+1. Provide out-of-range values that would be silently truncated
+2. Potentially bypass validation or cause undefined behavior
+3. Set invalid terminal control characters by exploiting cc_t truncation (e.g., 0x1FF → 0xFF)
+
+All strtoul() calls now validate errno and check that values fit in their target types before assignment.
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 11 C files  
+**Files Reviewed:** 13 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.026%  
+**Completion Percentage:** 0.031%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 11/111 bin files reviewed
+**Status:** 13/111 bin files reviewed
 
-#### Completed (11 files)
+#### Completed (13 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -113,17 +140,23 @@
 - ✅ bin/rmdir/rmdir.c (3 issues)
 - ✅ bin/sleep/sleep.c (3 issues)
 - ✅ bin/nproc/nproc.c (3 issues)
+- ✅ bin/stty/stty.c (5 issues)
+- ✅ bin/stty/gfmt.c (4 issues - 2 CRITICAL)
 
 #### Next Priority Queue
-1. ⬜ bin/stty/stty.c (152 LOC)
-2. ⬜ bin/kill/kill.c (179 LOC)
-3. ⬜ bin/mkdir/mkdir.c
-4. ⬜ bin/ln/ln.c
-5. ⬜ bin/chmod/chmod.c
+1. ⬜ bin/kill/kill.c (179 LOC)
+2. ⬜ bin/mkdir/mkdir.c
+3. ⬜ bin/ln/ln.c
+4. ⬜ bin/chmod/chmod.c
+5. ⬜ bin/cp/cp.c
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/stty/stty.c`. Warning: `stty` deals with terminal ioctls and is likely full of legacy complexity. Be careful.
+Continue with `bin/kill/kill.c`. This utility sends signals to processes and likely deals with PID parsing, signal name lookup, and privilege checking. Watch for:
+- Integer overflow in PID parsing
+- Signal number validation
+- Privilege escalation paths
+- Error handling for kill(2) system call
 
 **"If it looks wrong, it IS wrong until proven otherwise."**

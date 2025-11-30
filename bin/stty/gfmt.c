@@ -27,9 +27,12 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #include <sys/types.h>
 
 #include <err.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,21 +56,24 @@ gprint(struct termios *tp, struct winsize *wp __unused, int ldisc __unused)
 {
 	struct cchar *cp;
 
-	(void)printf("gfmt1:cflag=%lx:iflag=%lx:lflag=%lx:oflag=%lx:",
+	if (printf("gfmt1:cflag=%lx:iflag=%lx:lflag=%lx:oflag=%lx:",
 	    (u_long)tp->c_cflag, (u_long)tp->c_iflag, (u_long)tp->c_lflag,
-	    (u_long)tp->c_oflag);
+	    (u_long)tp->c_oflag) < 0)
+		err(1, "stdout");
 	for (cp = cchars1; cp->name; ++cp)
-		(void)printf("%s=%x:", cp->name, tp->c_cc[cp->sub]);
-	(void)printf("ispeed=%lu:ospeed=%lu\n",
-	    (u_long)cfgetispeed(tp), (u_long)cfgetospeed(tp));
+		if (printf("%s=%x:", cp->name, tp->c_cc[cp->sub]) < 0)
+			err(1, "stdout");
+	if (printf("ispeed=%lu:ospeed=%lu\n",
+	    (u_long)cfgetispeed(tp), (u_long)cfgetospeed(tp)) < 0)
+		err(1, "stdout");
 }
 
 void
 gread(struct termios *tp, char *s)
 {
 	struct cchar *cp;
-	char *ep, *p;
-	long tmp;
+	char *ep, *p, *endp;
+	unsigned long tmp;
 
 	if ((s = strchr(s, ':')) == NULL)
 		gerr(NULL);
@@ -78,40 +84,86 @@ gread(struct termios *tp, char *s)
 		if (!(ep = strchr(p, '=')))
 			gerr(p);
 		*ep++ = '\0';
-		tmp = strtoul(ep, NULL, 0x10);
+
+		/*
+		 * Parse the value. Default to base 16 for flags,
+		 * but use base 10 for speeds and special cc values.
+		 * Always validate the result to prevent integer
+		 * truncation vulnerabilities.
+		 */
+		errno = 0;
+		tmp = strtoul(ep, &endp, 0x10);
+		if (errno == ERANGE || *endp != '\0')
+			gerr(p);
 
 #define	CHK(s)	(*p == s[0] && !strcmp(p, s))
 		if (CHK("cflag")) {
-			tp->c_cflag = tmp;
+			/*
+			 * Ensure value fits in tcflag_t without truncation.
+			 * On most systems tcflag_t is unsigned int or
+			 * unsigned long, but we verify to be safe.
+			 */
+			if (tmp > (unsigned long)(tcflag_t)-1)
+				errx(1, "cflag value %lu out of range", tmp);
+			tp->c_cflag = (tcflag_t)tmp;
 			continue;
 		}
 		if (CHK("iflag")) {
-			tp->c_iflag = tmp;
+			if (tmp > (unsigned long)(tcflag_t)-1)
+				errx(1, "iflag value %lu out of range", tmp);
+			tp->c_iflag = (tcflag_t)tmp;
 			continue;
 		}
 		if (CHK("ispeed")) {
-			tmp = strtoul(ep, NULL, 10);
-			tp->c_ispeed = tmp;
+			errno = 0;
+			tmp = strtoul(ep, &endp, 10);
+			if (errno == ERANGE || *endp != '\0')
+				gerr(p);
+			if (tmp > (unsigned long)(speed_t)-1)
+				errx(1, "ispeed value %lu out of range", tmp);
+			tp->c_ispeed = (speed_t)tmp;
 			continue;
 		}
 		if (CHK("lflag")) {
-			tp->c_lflag = tmp;
+			if (tmp > (unsigned long)(tcflag_t)-1)
+				errx(1, "lflag value %lu out of range", tmp);
+			tp->c_lflag = (tcflag_t)tmp;
 			continue;
 		}
 		if (CHK("oflag")) {
-			tp->c_oflag = tmp;
+			if (tmp > (unsigned long)(tcflag_t)-1)
+				errx(1, "oflag value %lu out of range", tmp);
+			tp->c_oflag = (tcflag_t)tmp;
 			continue;
 		}
 		if (CHK("ospeed")) {
-			tmp = strtoul(ep, NULL, 10);
-			tp->c_ospeed = tmp;
+			errno = 0;
+			tmp = strtoul(ep, &endp, 10);
+			if (errno == ERANGE || *endp != '\0')
+				gerr(p);
+			if (tmp > (unsigned long)(speed_t)-1)
+				errx(1, "ospeed value %lu out of range", tmp);
+			tp->c_ospeed = (speed_t)tmp;
 			continue;
 		}
 		for (cp = cchars1; cp->name != NULL; ++cp)
 			if (CHK(cp->name)) {
-				if (cp->sub == VMIN || cp->sub == VTIME)
-					tmp = strtoul(ep, NULL, 10);
-				tp->c_cc[cp->sub] = tmp;
+				if (cp->sub == VMIN || cp->sub == VTIME) {
+					errno = 0;
+					tmp = strtoul(ep, &endp, 10);
+					if (errno == ERANGE || *endp != '\0')
+						gerr(p);
+				}
+				/*
+				 * CRITICAL: cc_t is typically unsigned char,
+				 * so values must be 0-255. Validate to prevent
+				 * truncation attacks.
+				 */
+				if (tmp > (unsigned long)(cc_t)-1)
+					errx(1, "%s value %lu out of range "
+					    "(max %u)", cp->name, tmp,
+					    (unsigned int)(cc_t)-1);
+				tp->c_cc[cp->sub] = (cc_t)tmp;
 				break;
 			}
 		if (cp->name == NULL)

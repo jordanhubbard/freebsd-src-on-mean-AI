@@ -27,6 +27,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #include <sys/types.h>
 
 #include <ctype.h>
@@ -57,7 +58,7 @@ main(int argc, char *argv[])
 	while (optind < argc &&
 	    strspn(argv[optind], "-aefg") == strlen(argv[optind]) &&
 	    (ch = getopt(argc, argv, "aef:g")) != -1)
-		switch(ch) {
+		switch (ch) {
 		case 'a':		/* undocumented: POSIX compatibility */
 			fmt = POSIX;
 			break;
@@ -89,7 +90,7 @@ args:	argc -= optind;
 
 	checkredirect();			/* conversion aid */
 
-	switch(fmt) {
+	switch (fmt) {
 	case NOTSET:
 		if (*argv)
 			break;
@@ -116,9 +117,15 @@ args:	argc -= optind;
 		if (isdigit(**argv)) {
 			speed_t speed;
 
+			/*
+			 * Parse speed as integer. Note: we accept any value
+			 * that strtonum() accepts, then rely on cfsetispeed()
+			 * and cfsetospeed() to validate it's a legal baud rate.
+			 * Those functions will fail if the speed is invalid.
+			 */
 			speed = strtonum(*argv, 0, UINT_MAX, &errstr);
 			if (errstr)
-				err(1, "speed");
+				errx(1, "speed value \"%s\": %s", *argv, errstr);
 			cfsetospeed(&i.t, speed);
 			cfsetispeed(&i.t, speed);
 			i.set = 1;
@@ -135,7 +142,7 @@ args:	argc -= optind;
 		usage();
 	}
 
-	if (i.set && tcsetattr(i.fd, 0, &i.t) < 0)
+	if (i.set && tcsetattr(i.fd, TCSANOW, &i.t) < 0)
 		err(1, "tcsetattr");
 	if (i.wset && ioctl(i.fd, TIOCSWINSZ, &i.win) < 0)
 		warn("TIOCSWINSZ");
@@ -148,5 +155,5 @@ usage(void)
 
 	(void)fprintf(stderr,
 	    "usage: stty [-a | -e | -g] [-f file] [arguments]\n");
-	exit (1);
+	exit(1);
 }
