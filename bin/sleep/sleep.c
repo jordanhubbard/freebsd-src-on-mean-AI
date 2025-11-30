@@ -27,6 +27,8 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
+
 #include <capsicum_helpers.h>
 #include <err.h>
 #include <errno.h>
@@ -46,7 +48,9 @@ report_request(int signo __unused)
 	report_requested = 1;
 }
 
-static void __dead2
+static void usage(void) __dead2;
+
+static void
 usage(void)
 {
 	fprintf(stderr, "usage: sleep number[unit] [...]\n"

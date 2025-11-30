@@ -13,6 +13,7 @@
  * probably should patch cpuset(1) instead.
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/cpuset.h>
 
@@ -76,7 +77,8 @@ main(int argc, char *argv[])
 {
 	const char *errstr;
 	cpuset_t mask;
-	int ch, cpus, ignore;
+	long cpus, ignore;
+	int ch;
 	bool all_flag;
 
 	ignore = 0;
@@ -88,7 +90,7 @@ main(int argc, char *argv[])
 			all_flag = true;
 			break;
 		case OPT_IGNORE:
-			ignore = strtonum(optarg, 0, INT_MAX, &errstr);
+			ignore = strtonum(optarg, 0, LONG_MAX, &errstr);
 			if (errstr)
 				errx(1, "bad ignore count: %s", errstr);
 			break;
@@ -126,7 +128,8 @@ main(int argc, char *argv[])
 	else
 		cpus -= ignore;
 
-	printf("%u\n", cpus);
+	if (printf("%ld\n", cpus) < 0)
+		err(1, "stdout");
 
 	exit(EXIT_SUCCESS);
 }

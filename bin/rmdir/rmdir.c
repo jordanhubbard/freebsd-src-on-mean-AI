@@ -29,6 +29,8 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
+
 #include <err.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,8 +71,10 @@ main(int argc, char *argv[])
 			warn("%s", *argv);
 			errors = 1;
 		} else {
-			if (vflag)
-				printf("%s\n", *argv);
+			if (vflag) {
+				if (printf("%s\n", *argv) < 0)
+					err(1, "stdout");
+			}
 			if (pflag)
 				errors |= rm_path(*argv);
 		}
@@ -100,8 +104,10 @@ rm_path(char *path)
 			warn("%s", path);
 			return (1);
 		}
-		if (vflag)
-			printf("%s\n", path);
+		if (vflag) {
+			if (printf("%s\n", path) < 0)
+				err(1, "stdout");
+		}
 	}
 
 	return (0);
@@ -110,7 +116,6 @@ rm_path(char *path)
 static void
 usage(void)
 {
-
 	(void)fprintf(stderr, "usage: rmdir [-pv] directory ...\n");
 	exit(2);
 }
