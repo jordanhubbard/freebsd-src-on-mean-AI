@@ -1,3 +1,23 @@
+N.B. This is a fork of the FreeBSD source tree created solely for the purpose
+of allowing angry AI reviewers (that is the default persona) to critique
+the work of the humans that came before them.
+
+It is purely an experiment to see what happens when AIs are allowed to
+brutally review an existing large code base.
+
+To start the analysis where the previous AI has left off, start your
+favorite model at the base of this tree and use the following prompt:
+Look at `AI_START_HERE.md` and get to work.
+
+If the model you choose is relatively good at "thinking" and can follow basic
+instructions well, it will be able to continue the review process on a new
+chunk of work in this code base using the existing TODO guidelines and record
+its work in the same style and "rolling todo list" format.  Just git commit
+your work and hand it off to the next AI-augmented code sadist and we can
+keep the endless beer song going!
+
+We now resume with our regularly scheduled README.md file:
+
 FreeBSD Source:
 ---------------
 This is the top level of the FreeBSD source directory.
