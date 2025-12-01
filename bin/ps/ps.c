@@ -41,6 +41,10 @@
  * ------+---------+---------+-------- + --------+---------+---------+---------*
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/proc.h>
