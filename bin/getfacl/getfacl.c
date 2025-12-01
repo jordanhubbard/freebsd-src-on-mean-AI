@@ -30,10 +30,15 @@
  * and send the results to stdout
  */
 
-#include <sys/types.h>
-#include <sys/param.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then other system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/acl.h>
+#include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #include <err.h>
 #include <errno.h>
@@ -157,13 +162,26 @@ print_acl(char *path, acl_type_t type, int hflag, int iflag, int nflag,
 		}
 	}
 
-	if (more_than_one)
-		printf("\n");
-	else
+	/*
+	 * FIXED: Unchecked printf calls
+	 * getfacl output is used in scripts for ACL backup/restore.
+	 * If stdout fails (broken pipe, disk full), scripts need to
+	 * know via non-zero exit code to avoid partial backups.
+	 */
+	if (more_than_one) {
+		if (printf("\n") < 0) {
+			warn("printf");
+			return (-1);
+		}
+	} else
 		more_than_one++;
-	if (!qflag)
-		printf("# file: %s\n# owner: %s\n# group: %s\n", path,
-		    getuname(sb.st_uid), getgname(sb.st_gid));
+	if (!qflag) {
+		if (printf("# file: %s\n# owner: %s\n# group: %s\n", path,
+		    getuname(sb.st_uid), getgname(sb.st_gid)) < 0) {
+			warn("printf");
+			return (-1);
+		}
+	}
 
 	if (!acl) {
 		if (type == ACL_TYPE_DEFAULT)
@@ -191,7 +209,18 @@ print_acl(char *path, acl_type_t type, int hflag, int iflag, int nflag,
 		return(-1);
 	}
 
-	printf("%s", acl_text);
+	/*
+	 * FIXED: Unchecked printf for ACL text output
+	 * This is the critical ACL data. If output fails, the ACL
+	 * information is lost. Scripts using getfacl for backup
+	 * must know if the operation failed.
+	 */
+	if (printf("%s", acl_text) < 0) {
+		warn("printf");
+		(void)acl_free(acl);
+		(void)acl_free(acl_text);
+		return(-1);
+	}
 
 	(void)acl_free(acl);
 	(void)acl_free(acl_text);
