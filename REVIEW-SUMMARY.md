@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 36 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait)
-- **Lines of Code Analyzed:** ~16080
-- **Issues Identified:** 186 distinct problems
-- **Issues Documented:** 186
+- **Files Reviewed:** 37 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl)
+- **Lines of Code Analyzed:** ~16365
+- **Issues Identified:** 191 distinct problems
+- **Issues Documented:** 191
 - **CRITICAL BUGS FIXED:** 15 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
 
 ### Severity Breakdown
@@ -681,21 +681,64 @@ The main issue was unchecked I/O which matters for scripting use cases.
 
 **Issues Fixed:** 6 (2 style, 4 correctness)
 
+### 36. bin/getfacl/getfacl.c
+**Status:** ACCEPTABLE (with fixes) - CRITICAL FOR ACL BACKUP SAFETY
+**Issues:**
+- **Unchecked printf()** in separator output. **Fixed.**
+- **Unchecked printf()** in header output (file/owner/group). **Fixed.**
+- **Unchecked printf()** for ACL text output (THE CRITICAL DATA). **Fixed.**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Style:** System headers not alphabetically ordered. **Fixed.**
+
+**Code Analysis:**
+getfacl is a POSIX.1e ACL extraction utility (~287 lines):
+- Extracts Access Control Lists from files and directories
+- Supports both POSIX.1e and NFSv4 ACLs
+- Used for ACL backup/restore operations (SECURITY-CRITICAL)
+- Can read filenames from stdin (-) for batch processing
+- Supports various output formats (-n numeric, -v verbose, -i append-id)
+- -s flag skips trivial ACLs (optimization)
+- -h flag for symbolic link handling
+
+**SECURITY IMPORTANCE - WHY UNCHECKED I/O IS CRITICAL:**
+getfacl is used to backup ACLs before system changes. ACL data controls file access permissions - who can read, write, or execute files.
+
+**ATTACK SCENARIO WITHOUT I/O CHECKING:**
+1. Admin runs: `getfacl -R /etc > etc-acls.txt` to backup ACLs
+2. Disk fills up or pipe breaks during output
+3. Without checking: partial ACL data written, NO error reported
+4. Script thinks backup succeeded but has incomplete data
+5. Later, admin restores from incomplete backup: `setfacl --restore=etc-acls.txt`
+6. Result: **Wrong permissions on critical system files**
+   - Files may be too permissive (security breach)
+   - Files may be too restrictive (system breaks)
+
+**LESSON:** For security utilities that backup/restore access controls, EVERY I/O operation must be checked. Partial output is worse than no output because it gives false confidence.
+
+**CODE QUALITY: GOOD**
+- stat/lstat error checking: OK
+- pathconf/lpathconf error checking: OK (properly handles EINVAL for non-ACL filesystems)
+- All acl_* function calls checked: OK
+- fgets() usage: proper (PATH_MAX buffer, NULL check)
+- Static buffers in getuname/getgname: safe (single use per printf)
+
+**Issues Fixed:** 5 (2 style, 3 correctness - all I/O related)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 36 C files (1 partial)  
+**Files Reviewed:** 37 C files (1 partial)  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.085%  
+**Completion Percentage:** 0.088%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 36/111 bin files reviewed  
+**Status:** 37/111 bin files reviewed  
 *Note: ed is partially audited - needs deep review*
 
-#### Completed (36 files)
+#### Completed (37 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -731,9 +774,10 @@ The main issue was unchecked I/O which matters for scripting use cases.
 - ✅ bin/chflags/chflags.c (3 issues, good code quality)
 - ✅ bin/kenv/kenv.c (6 issues, reasonable code quality)
 - ✅ bin/pwait/pwait.c (6 issues, good code quality)
+- ✅ bin/getfacl/getfacl.c (5 issues, critical for ACL backup safety)
 
 #### Next Priority Queue
-1. ⬜ bin/getfacl/getfacl.c
+1. ⬜ bin/cpuset/cpuset.c
 2. ⬜ bin/expr/expr.y
 3. ⬜ bin/ed/main.c
 4. ⬜ bin/pax/pax.c
