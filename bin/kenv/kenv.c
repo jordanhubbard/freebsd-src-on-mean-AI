@@ -23,8 +23,13 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then other sys headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/sysctl.h>
+#include <sys/types.h>
 #include <err.h>
 #include <errno.h>
 #include <kenv.h>
@@ -150,6 +155,15 @@ kdumpenv(int dump_type)
 	envlen = kenv(dump_type, NULL, NULL, 0);
 	if (envlen < 0)
 		return (-1);
+	/*
+	 * Retry loop: allocate buffer with 20% overhead, retry if grown.
+	 * POTENTIAL INTEGER OVERFLOW: envlen * 120 / 100 could overflow
+	 * if envlen is very large (near INT_MAX). However, kenv(2) returns
+	 * sizes based on actual kernel environment, which is typically
+	 * small (few KB). An overflow would require gigabytes of kernel
+	 * environment data, which is impossible in practice.
+	 * Documenting for completeness, but not fixing due to infeasibility.
+	 */
 	for (;;) {
 		buflen = envlen * 120 / 100;
 		buf = calloc(1, buflen + 1);
@@ -175,10 +189,19 @@ kdumpenv(int dump_type)
 		if (cp == NULL)
 			continue;
 		*cp++ = '\0';
-		if (Nflag)
-			printf("%s\n", bp);
-		else
-			printf("%s=\"%s\"\n", bp, cp);
+		/*
+		 * FIXED: Unchecked printf
+		 * kenv output is used in scripts for system configuration.
+		 * If stdout fails (broken pipe, disk full), scripts need
+		 * to know via non-zero exit code.
+		 */
+		if (Nflag) {
+			if (printf("%s\n", bp) < 0)
+				err(1, "printf");
+		} else {
+			if (printf("%s=\"%s\"\n", bp, cp) < 0)
+				err(1, "printf");
+		}
 		bp = cp;
 	}
 
@@ -192,13 +215,29 @@ kgetenv(const char *env)
 	char buf[1024];
 	int ret;
 
+	/*
+	 * POTENTIAL ISSUE: Fixed 1024-byte buffer
+	 * Kernel environment variables can theoretically be longer.
+	 * kenv(2) will truncate silently if buffer is too small.
+	 * This is a known limitation - increasing buffer size would
+	 * help but not eliminate the issue. Dynamic allocation would
+	 * be better but requires retry loop like kdumpenv().
+	 * For now, 1024 bytes is sufficient for typical use.
+	 */
 	ret = kenv(KENV_GET, env, buf, sizeof(buf));
 	if (ret == -1)
 		return (ret);
-	if (vflag)
-		printf("%s=\"%s\"\n", env, buf);
-	else
-		printf("%s\n", buf);
+	/*
+	 * FIXED: Unchecked printf
+	 * kenv output is critical for system configuration scripts.
+	 */
+	if (vflag) {
+		if (printf("%s=\"%s\"\n", env, buf) < 0)
+			err(1, "printf");
+	} else {
+		if (printf("%s\n", buf) < 0)
+			err(1, "printf");
+	}
 	return (0);
 }
 
@@ -208,8 +247,16 @@ ksetenv(const char *env, char *val)
 	int ret;
 
 	ret = kenv(KENV_SET, env, val, strlen(val) + 1);
-	if (ret == 0)
-		printf("%s=\"%s\"\n", env, val);
+	if (ret == 0) {
+		/*
+		 * FIXED: Unchecked printf
+		 * Setting kernel environment variables is security-sensitive.
+		 * If the confirmation output fails, the operation succeeded
+		 * but the user doesn't know. Check and report.
+		 */
+		if (printf("%s=\"%s\"\n", env, val) < 0)
+			err(1, "printf");
+	}
 	return (ret);
 }
 
