@@ -31,11 +31,16 @@
  * OF SUCH DAMAGE.
  */
 
-#include <sys/types.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then other system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/event.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/tree.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
 #include <err.h>
@@ -210,8 +215,14 @@ main(int argc, char *argv[])
 		if (kevent(kq, e + nleft, 1, NULL, 0, NULL) == -1) {
 			err(EX_OSERR, "kevent");
 		}
-		/* Ignore SIGALRM to not interrupt kevent(2). */
-		signal(SIGALRM, SIG_IGN);
+		/*
+		 * FIXED: Unchecked signal(SIGALRM)
+		 * Ignore SIGALRM to not interrupt kevent(2).
+		 * If signal() fails, the handler won't be set and SIGALRM
+		 * will use default behavior (terminate process).
+		 */
+		if (signal(SIGALRM, SIG_IGN) == SIG_ERR)
+			err(EX_OSERR, "signal(SIGALRM)");
 		if (setitimer(ITIMER_REAL, &itv, NULL) == -1) {
 			err(EX_OSERR, "setitimer");
 		}
@@ -224,8 +235,14 @@ main(int argc, char *argv[])
 		}
 		for (i = 0; i < n; i++) {
 			if (e[i].filter == EVFILT_SIGNAL) {
+				/*
+				 * FIXED: Unchecked printf in verbose mode
+				 * pwait is used in scripts to wait for processes.
+				 * If output fails, scripts should know via exit code.
+				 */
 				if (verbose) {
-					printf("timeout\n");
+					if (printf("timeout\n") < 0)
+						err(EX_OSERR, "printf");
 				}
 				ret = 124;
 			}
@@ -233,13 +250,16 @@ main(int argc, char *argv[])
 			if (verbose) {
 				status = e[i].data;
 				if (WIFEXITED(status)) {
-					printf("%ld: exited with status %d.\n",
-					    pid, WEXITSTATUS(status));
+					if (printf("%ld: exited with status %d.\n",
+					    pid, WEXITSTATUS(status)) < 0)
+						err(EX_OSERR, "printf");
 				} else if (WIFSIGNALED(status)) {
-					printf("%ld: killed by signal %d.\n",
-					    pid, WTERMSIG(status));
+					if (printf("%ld: killed by signal %d.\n",
+					    pid, WTERMSIG(status)) < 0)
+						err(EX_OSERR, "printf");
 				} else {
-					printf("%ld: terminated.\n", pid);
+					if (printf("%ld: terminated.\n", pid) < 0)
+						err(EX_OSERR, "printf");
 				}
 			}
 			k.pid = pid;
@@ -252,8 +272,14 @@ main(int argc, char *argv[])
 		}
 	}
 	if (pflag) {
+		/*
+		 * FIXED: Unchecked printf in pflag mode
+		 * The -p flag prints PIDs of processes still running.
+		 * Scripts depend on this output. Check for errors.
+		 */
 		RB_FOREACH(p, pidtree, &pids) {
-			printf("%d\n", p->pid);
+			if (printf("%d\n", p->pid) < 0)
+				err(EX_OSERR, "printf");
 		}
 	}
 	exit(ret);
