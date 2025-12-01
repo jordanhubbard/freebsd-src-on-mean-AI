@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 31 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr)
-- **Lines of Code Analyzed:** ~12150
-- **Issues Identified:** 165 distinct problems
-- **Issues Documented:** 165
+- **Files Reviewed:** 32 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h)
+- **Lines of Code Analyzed:** ~15200
+- **Issues Identified:** 167 distinct problems
+- **Issues Documented:** 167
 - **CRITICAL BUGS FIXED:** 14 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation)
 
 ### Severity Breakdown
@@ -509,20 +509,57 @@ The regex vulnerability is unfixable without engine-level changes. But developer
 
 **Issues Fixed:** 3 (1 style, 1 correctness, 1 major documentation)
 
+### 31. bin/ed/*.c (PARTIAL AUDIT)
+**Status:** STYLE FIXES ONLY - REQUIRES DEEP AUDIT
+**Issues:**
+- **Style:** main.c - Include ordering (`sys/cdefs.h` must be first). **Fixed.**
+- **Style:** ed.h - Include ordering (`sys/cdefs.h` must be first). **Fixed.**
+
+**Code Analysis:**
+ed is the classic line editor (~3000 lines across 7 files):
+- main.c: Main control loop and user interface (1400 lines)
+- buf.c: Buffer management with linked lists
+- glbl.c: Global command handling
+- io.c: File I/O operations
+- re.c: Regular expression handling
+- sub.c: Substitute command implementation
+- undo.c: Undo/redo mechanism
+
+**WARNING: This is a PARTIAL AUDIT**
+Only obvious style violations were fixed. ed(1) requires dedicated deep audit due to:
+
+**CRITICAL SECURITY CONCERNS (NOT YET AUDITED):**
+1. **Shell command injection:** ! command executes shell commands with user input
+2. **Buffer overflow potential:** Extensive string operations throughout
+3. **Signal handling races:** setjmp/longjmp with file operations
+4. **Integer overflow:** Line number arithmetic (long addresses)
+5. **Temp file handling:** Security in restricted mode
+6. **Unchecked I/O:** File operations may lack error checking
+
+**TODO:** Schedule multi-hour deep audit session for bin/ed focusing on:
+- buf.c line operations
+- io.c file I/O error paths
+- Shell command construction in main.c
+- Address arithmetic overflow
+- Signal handler correctness
+
+**Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 31 C files  
+**Files Reviewed:** 32 C files (1 partial)  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.074%  
+**Completion Percentage:** 0.076%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 31/111 bin files reviewed
+**Status:** 32/111 bin files reviewed  
+*Note: ed is partially audited - needs deep review*
 
-#### Completed (31 files)
+#### Completed (32 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -553,9 +590,10 @@ The regex vulnerability is unfixable without engine-level changes. But developer
 - ✅ bin/date/date.c (8 issues - 1 CRITICAL integer overflow)
 - ✅ bin/test/test.c (4 issues - 1 CRITICAL integer truncation + extensive TOCTOU documentation)
 - ✅ bin/expr/expr.y (3 issues + ReDoS documentation, arithmetic overflow handling excellent)
+- ⚠️ bin/ed/*.c (2 style issues - PARTIAL AUDIT ONLY, needs deep review)
 
 #### Next Priority Queue
-1. ⬜ bin/ed/main.c
+1. ⬜ bin/pax/pax.c
 2. ⬜ bin/expr/expr.y
 3. ⬜ bin/ed/main.c
 4. ⬜ bin/pax/pax.c
