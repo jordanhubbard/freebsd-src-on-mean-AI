@@ -39,4 +39,16 @@
 - **gets()**: **FATAL**. Never use.
 - **strcpy()**: Dangerous. Use `strlcpy()`.
 
+## 6. Comment Syntax Errors Can Break Builds
+**Case Study:** AI reviewer added comments containing `sys/*`
+- **The Bug:** `/*` within a `/* ... */` comment block
+- **The Compiler:** `-Werror,-Wcomment` treats nested `/*` as error
+- **The Impact:** Build breaks with "error: '/*' within block comment"
+- **The Fix:** Use `sys/...` or `sys/xxx` instead of `sys/*`
+- **Lesson:** **C doesn't support nested comments.** Any `/*` or `*/` pattern inside a comment will break. When writing comments:
+  - Avoid glob patterns with `*` adjacent to `/`
+  - Use `...` or `xxx` for wildcards
+  - Test build with `-Werror` enabled
+  - Remember: Comments are code too!
+
 *Add to this file as new classes of bugs are discovered.*
