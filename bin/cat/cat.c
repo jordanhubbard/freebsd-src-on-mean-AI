@@ -33,7 +33,7 @@
  */
 
 /*
- * FIXED: Include ordering per style(9) - sys/* headers first alphabetically,
+ * FIXED: Include ordering per style(9) - sys/... headers first alphabetically,
  * then blank line, then userland headers alphabetically.
  */
 #include <sys/param.h>
