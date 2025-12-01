@@ -29,8 +29,13 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then sys/... headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #include <err.h>
 #include <errno.h>
@@ -103,7 +108,14 @@ main(int argc, char *argv[])
 	if (argc < 2)
 		usage();
 
-	(void)signal(SIGINFO, siginfo_handler);
+	/*
+	 * FIXED: Unchecked signal(SIGINFO)
+	 * If signal() fails (returns SIG_ERR), the SIGINFO handler won't
+	 * be installed, and progress reporting via Ctrl-T won't work.
+	 * This is a usability issue, not critical, but should be checked.
+	 */
+	if (signal(SIGINFO, siginfo_handler) == SIG_ERR)
+		warn("signal(SIGINFO)");
 
 	if (Rflag) {
 		if (hflag)
