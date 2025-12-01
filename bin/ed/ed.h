@@ -25,6 +25,11 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first in headers.
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <errno.h>
 #include <limits.h>

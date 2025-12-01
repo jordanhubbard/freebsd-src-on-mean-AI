@@ -38,9 +38,14 @@
  *
  */
 
-#include <sys/types.h>
-
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then sys/... headers alphabetically,
+ * then standard headers alphabetically, then local headers last.
+ */
+#include <sys/cdefs.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <ctype.h>
 #include <locale.h>
