@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 35 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv)
-- **Lines of Code Analyzed:** ~15820
-- **Issues Identified:** 180 distinct problems
-- **Issues Documented:** 180
+- **Files Reviewed:** 36 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait)
+- **Lines of Code Analyzed:** ~16080
+- **Issues Identified:** 186 distinct problems
+- **Issues Documented:** 186
 - **CRITICAL BUGS FIXED:** 15 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
 
 ### Severity Breakdown
@@ -641,21 +641,61 @@ Main issue was unchecked printf() calls which matter for scripting use cases.
 
 **Issues Fixed:** 6 (1 style, 5 correctness/documentation)
 
+### 35. bin/pwait/pwait.c
+**Status:** ACCEPTABLE (with fixes)
+**Issues:**
+- **Unchecked signal(SIGALRM)** - timeout feature would break if signal() fails. **Fixed.**
+- **Unchecked printf()** in timeout message (verbose mode). **Fixed.**
+- **Unchecked printf()** in exit status messages (3x in verbose mode). **Fixed.**
+- **Unchecked printf()** in -p flag output. **Fixed.**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Style:** System headers not alphabetically ordered. **Fixed.**
+
+**Code Analysis:**
+pwait is a process wait utility (~260 lines):
+- Waits for specified processes to terminate
+- Uses kqueue(2) with EVFILT_PROC for efficient event-driven waiting
+- Supports timeout with -t flag (SIGALRM + setitimer)
+- Uses red-black tree (RB_TREE) to track PIDs (prevents duplicates)
+- Verbose mode (-v) shows detailed exit status or termination signal
+- -p flag shows PIDs still running when timeout occurs
+- -o flag exits after first process terminates
+
+**KEY IMPLEMENTATION DETAILS:**
+- **kqueue-based:** Uses EVFILT_PROC with NOTE_EXIT for efficient process monitoring
+- **RB tree for PIDs:** Prevents duplicate PIDs and provides O(log n) lookup
+- **Timeout handling:** Uses EVFILT_SIGNAL for SIGALRM, ignores signal to avoid interrupting kevent
+- **PID validation:** Checks against kern.pid_max sysctl (defaults to 99999 if unavailable)
+- **Solaris compatibility:** Strips /proc/ prefix from arguments
+
+**CODE QUALITY: GOOD**
+- kqueue() error checking: OK
+- kevent() error checking: OK
+- malloc() error checking: OK
+- RB tree operations: correct
+- PID validation: proper (< 0, > pid_max checks)
+- Timeout arithmetic: reasonable (checks for > 100000000L)
+
+Well-structured code with proper use of modern FreeBSD APIs (kqueue, RB trees).
+The main issue was unchecked I/O which matters for scripting use cases.
+
+**Issues Fixed:** 6 (2 style, 4 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 35 C files (1 partial)  
+**Files Reviewed:** 36 C files (1 partial)  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.083%  
+**Completion Percentage:** 0.085%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 35/111 bin files reviewed  
+**Status:** 36/111 bin files reviewed  
 *Note: ed is partially audited - needs deep review*
 
-#### Completed (35 files)
+#### Completed (36 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -690,9 +730,10 @@ Main issue was unchecked printf() calls which matter for scripting use cases.
 - ✅ bin/uuidgen/uuidgen.c (4 issues - 1 CRITICAL heap overflow)
 - ✅ bin/chflags/chflags.c (3 issues, good code quality)
 - ✅ bin/kenv/kenv.c (6 issues, reasonable code quality)
+- ✅ bin/pwait/pwait.c (6 issues, good code quality)
 
 #### Next Priority Queue
-1. ⬜ bin/pwait/pwait.c
+1. ⬜ bin/getfacl/getfacl.c
 2. ⬜ bin/expr/expr.y
 3. ⬜ bin/ed/main.c
 4. ⬜ bin/pax/pax.c
