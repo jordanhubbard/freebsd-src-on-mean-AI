@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 30 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test)
-- **Lines of Code Analyzed:** ~11550
-- **Issues Identified:** 162 distinct problems
-- **Issues Documented:** 162
+- **Files Reviewed:** 31 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr)
+- **Lines of Code Analyzed:** ~12150
+- **Issues Identified:** 165 distinct problems
+- **Issues Documented:** 165
 - **CRITICAL BUGS FIXED:** 14 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation)
 
 ### Severity Breakdown
@@ -471,20 +471,58 @@ The TOCTOU issues are unfixable by design - shell scripts are inherently racy. B
 
 **Issues Fixed:** 4 (1 CRITICAL security, 2 style, 1 major documentation)
 
+### 30. bin/expr/expr.y
+**Status:** ACCEPTABLE (with fixes)
+**Issues:**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Correctness:** Unchecked printf() in main(). **Fixed.**
+- **Documentation:** Added extensive ReDoS security warnings. **Added.**
+
+**Code Analysis:**
+expr is a yacc/bison-based expression evaluator (~600 lines) used in shell scripts:
+- Arithmetic operations: +, -, *, /, % with intmax_t precision
+- Comparison operators: =, !=, <, <=, >, >=
+- Boolean operators: &, | for AND/OR logic
+- Regular expression matching via colon operator (STRING : REGEX)
+- String manipulation and type coercion
+
+**EXCELLENT ARITHMETIC OVERFLOW HANDLING:**
+The code has MODEL arithmetic overflow checking:
+- `assert_plus()` detects addition overflow (positive + positive must be positive)
+- `assert_minus()` detects subtraction overflow (a-b where signs differ)
+- `assert_times()` detects multiplication overflow including -1 * INTMAX_MIN edge case
+- `assert_div()` handles division by zero and INTMAX_MIN / -1 overflow
+- Uses `volatile` keyword to prevent compiler optimization of overflow checks
+- Performs arithmetic FIRST, then validates result to catch undefined behavior
+
+This is TEXTBOOK PERFECT overflow handling. Well done to original authors (Pace Willisson, J.T. Conklin).
+
+**ReDoS DOCUMENTATION:** Added 40+ lines warning about Regular Expression Denial of Service:
+- User-supplied regex patterns can cause exponential backtracking
+- Attack example: `expr "aaaaaaaaaa..." : "(a+)+"` hangs indefinitely
+- Explained resource exhaustion from complex patterns
+- Clarified that POSIX basic regex limits complexity somewhat
+- Emphasized regex engine limitations cannot be fixed at application level
+- Recommended timeouts and pattern complexity limits for production
+
+The regex vulnerability is unfixable without engine-level changes. But developers must understand the risks.
+
+**Issues Fixed:** 3 (1 style, 1 correctness, 1 major documentation)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 30 C files  
+**Files Reviewed:** 31 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.071%  
+**Completion Percentage:** 0.074%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 30/111 bin files reviewed
+**Status:** 31/111 bin files reviewed
 
-#### Completed (30 files)
+#### Completed (31 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -514,9 +552,10 @@ The TOCTOU issues are unfixable by design - shell scripts are inherently racy. B
 - ✅ bin/ps/ps.c (1 issue)
 - ✅ bin/date/date.c (8 issues - 1 CRITICAL integer overflow)
 - ✅ bin/test/test.c (4 issues - 1 CRITICAL integer truncation + extensive TOCTOU documentation)
+- ✅ bin/expr/expr.y (3 issues + ReDoS documentation, arithmetic overflow handling excellent)
 
 #### Next Priority Queue
-1. ⬜ bin/expr/expr.y
+1. ⬜ bin/ed/main.c
 2. ⬜ bin/expr/expr.y
 3. ⬜ bin/ed/main.c
 4. ⬜ bin/pax/pax.c
