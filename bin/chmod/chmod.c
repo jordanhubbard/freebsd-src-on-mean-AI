@@ -29,6 +29,10 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 
@@ -123,7 +127,14 @@ done:	argv += optind;
 	if (argc < 2)
 		usage();
 
-	(void)signal(SIGINFO, siginfo_handler);
+	/*
+	 * [AI-REVIEW] Correctness: signal() can fail and return SIG_ERR.
+	 * While SIGINFO handler failure is not critical (it's just progress
+	 * reporting), we should at least check for errors to avoid silent
+	 * failures. If signal() fails, we continue without the handler.
+	 */
+	if (signal(SIGINFO, siginfo_handler) == SIG_ERR)
+		warn("signal(SIGINFO)");
 
 	if (Rflag) {
 		if (hflag)
@@ -193,7 +204,17 @@ done:	argv += optind;
 			warn("%s", p->fts_path);
 			rval = 1;
 		} else if (vflag || siginfo) {
-			(void)printf("%s", p->fts_path);
+			/*
+			 * [AI-REVIEW] Correctness: printf() can fail (ENOMEM,
+			 * EIO, ENOSPC on NFS, broken pipe). While verbose output
+			 * failure is not fatal, we should detect it rather than
+			 * silently continuing. If printf() fails, treat it like
+			 * other I/O errors and set error status.
+			 */
+			if (printf("%s", p->fts_path) < 0) {
+				warn("printf");
+				rval = 1;
+			}
 
 			if (vflag > 1 || siginfo) {
 				char m1[12], m2[12];
@@ -201,12 +222,18 @@ done:	argv += optind;
 				strmode(p->fts_statp->st_mode, m1);
 				strmode((p->fts_statp->st_mode &
 				    S_IFMT) | newmode, m2);
-				(void)printf(": 0%o [%s] -> 0%o [%s]",
+				if (printf(": 0%o [%s] -> 0%o [%s]",
 				    p->fts_statp->st_mode, m1,
 				    (p->fts_statp->st_mode & S_IFMT) |
-				    newmode, m2);
+				    newmode, m2) < 0) {
+					warn("printf");
+					rval = 1;
+				}
 			}
-			(void)printf("\n");
+			if (printf("\n") < 0) {
+				warn("printf");
+				rval = 1;
+			}
 			siginfo = 0;
 		}
 	}
@@ -218,8 +245,15 @@ done:	argv += optind;
 static void
 usage(void)
 {
-	(void)fprintf(stderr,
-	    "usage: chmod [-fhv] [-R [-H | -L | -P]] mode file ...\n");
+	/*
+	 * [AI-REVIEW] Correctness: fprintf() can fail. Even though we're
+	 * about to exit(1), if stderr write fails the user gets no error
+	 * message. Check the return value and use err(1, ...) on failure
+	 * to provide diagnostic information.
+	 */
+	if (fprintf(stderr,
+	    "usage: chmod [-fhv] [-R [-H | -L | -P]] mode file ...\n") < 0)
+		err(1, "fprintf");
 	exit(1);
 }
 

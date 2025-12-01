@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 16 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, cat/Makefile)
-- **Lines of Code Analyzed:** ~3300
-- **Issues Identified:** 92 distinct problems
-- **Issues Documented:** 92
+- **Files Reviewed:** 17 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cat/Makefile)
+- **Lines of Code Analyzed:** ~3550
+- **Issues Identified:** 96 distinct problems
+- **Issues Documented:** 96
 - **CRITICAL BUGS FIXED:** 8 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition)
 
 ### Severity Breakdown
@@ -33,11 +33,11 @@
   - **dirname() argv corruption in mkdir.c (POSIX allows dirname to modify argument) FIXED**
   - **TOCTOU race condition in ln.c link command (useless lstat check before link) FIXED**
   
-- **style(9) Violations:** 27+
+- **style(9) Violations:** 28+
   - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style
   
-- **Correctness/Logic Errors:** 35+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup
+- **Correctness/Logic Errors:** 38+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal()
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
@@ -205,20 +205,44 @@ These comments will school future generations on proper security practices.
 
 **Issues Fixed:** 6 (1 critical TOCTOU, 2 style, 3 correctness)
 
+### 16. bin/chmod/chmod.c
+**Status:** ACCEPTABLE (with fixes)
+**Issues:**
+- **Style:** Missing `sys/cdefs.h` (should be first include). **Fixed.**
+- **Correctness: Unchecked signal()** - `signal(SIGINFO, siginfo_handler)` can fail and return SIG_ERR. While SIGINFO handler failure is non-fatal (it's just progress reporting), we should check for errors. Added error check with warn() on failure. **Fixed.**
+- **Correctness: Unchecked printf() (3 instances)** - Lines 196, 204, 209 in verbose output path ignored printf() errors. printf() can fail (ENOMEM, EIO, ENOSPC on NFS, broken pipe). Now checked and set error status on failure. **Fixed.**
+- **Correctness: Unchecked fprintf()** - usage() function's fprintf() to stderr ignored errors. Even though we're about to exit(1), if stderr write fails the user gets no error message. Added error check. **Fixed.**
+
+**Code Quality:**
+This is one of the cleaner files reviewed so far. The code:
+- Uses fts(3) for directory traversal (safe, well-tested library)
+- Uses fchmodat() with AT_SYMLINK_NOFOLLOW for atomic permission changes (no TOCTOU)
+- Properly handles symlinks with -h, -H, -L, -P flags
+- Correctly handles NFSv4 ACLs
+- Has good error handling for fts operations
+
+**Security Analysis:**
+- **Permission parsing:** Handled by setmode(3)/getmode(3) library functions, which are well-tested and handle octal/symbolic modes correctly. No vulnerabilities found.
+- **Symlink following:** Correctly uses AT_SYMLINK_NOFOLLOW when appropriate. No TOCTOU races.
+- **Recursive traversal:** Uses fts(3) which handles edge cases (symlinks, deep directories, etc.) correctly.
+- **No privilege escalation issues:** chmod is not setuid and doesn't need special privilege handling.
+
+**Issues Fixed:** 4 (1 style, 3 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 16 C files  
+**Files Reviewed:** 17 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.038%  
+**Completion Percentage:** 0.040%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 16/111 bin files reviewed
+**Status:** 17/111 bin files reviewed
 
-#### Completed (16 files)
+#### Completed (17 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -234,24 +258,31 @@ These comments will school future generations on proper security practices.
 - ✅ bin/kill/kill.c (7 issues - 1 CRITICAL)
 - ✅ bin/mkdir/mkdir.c (5 issues - 1 CRITICAL)
 - ✅ bin/ln/ln.c (6 issues - 1 CRITICAL TOCTOU + 100+ lines of educational comments)
+- ✅ bin/chmod/chmod.c (4 issues)
 
 #### Next Priority Queue
-1. ⬜ bin/chmod/chmod.c
-2. ⬜ bin/cp/cp.c
-3. ⬜ bin/mv/mv.c
-4. ⬜ bin/rm/rm.c
-5. ⬜ bin/ls/ls.c
+1. ⬜ bin/cp/cp.c
+2. ⬜ bin/mv/mv.c
+3. ⬜ bin/rm/rm.c
+4. ⬜ bin/ls/ls.c
+5. ⬜ bin/chown/chown.c
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/chmod/chmod.c`. This utility changes file permissions. Watch for:
-- Permission parsing vulnerabilities (integer overflow in octal parsing)
-- Symbolic permission parsing bugs
-- Symlink following issues (chmod on symlink vs target)
-- TOCTOU race conditions
-- Recursive permission changes (-R flag) - directory traversal, symlink attacks
-- Privilege escalation via permission changes
+Continue with `bin/cp/cp.c`. This utility copies files and directories. Watch for:
+- **Buffer overflows:** Path construction, string concatenation, stat buffers
+- **TOCTOU race conditions:** Checking if file exists then copying
+- **Symlink attacks:** Following symlinks in recursive copies (-R flag)
+- **Directory traversal:** Recursive copy (-R) with malicious symlinks
+- **Sparse file handling:** st_blocks vs st_size mismatches
+- **Device file copying:** Dangerous copy of /dev/* files
+- **Metadata preservation:** Integer truncation in timestamps, ownership
+- **Memory exhaustion:** Large file copies, unbounded malloc
+- **Concurrent modification:** Source file changing during copy
+- **Error handling:** Partial writes, disk full, permission denied
+
+**cp(1) is NOTORIOUS for security bugs. Assume EVERY line has a vulnerability until proven otherwise.**
 
 **"If it looks wrong, it IS wrong until proven otherwise."**
 
