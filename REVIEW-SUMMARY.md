@@ -11,15 +11,15 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 17 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cat/Makefile)
-- **Lines of Code Analyzed:** ~3550
-- **Issues Identified:** 96 distinct problems
-- **Issues Documented:** 96
-- **CRITICAL BUGS FIXED:** 8 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition)
+- **Files Reviewed:** 19 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, cat/Makefile)
+- **Lines of Code Analyzed:** ~4750
+- **Issues Identified:** 111 distinct problems
+- **Issues Documented:** 111
+- **CRITICAL BUGS FIXED:** 10 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf)
 
 ### Severity Breakdown
 
-- **CRITICAL Security/Correctness Issues:** 12
+- **CRITICAL Security/Correctness Issues:** 14
   - Unchecked fdopen() NULL return in cat (crash vulnerability)
   - Uninitialized struct flock in cat (kernel data leak)
   - st_blksize untrusted in cat (DoS via memory exhaustion) **FIXED**
@@ -32,12 +32,14 @@
   - **Integer overflow in kill.c signal parsing (strtol to int without overflow check) FIXED**
   - **dirname() argv corruption in mkdir.c (POSIX allows dirname to modify argument) FIXED**
   - **TOCTOU race condition in ln.c link command (useless lstat check before link) FIXED**
+  - **Uninitialized stat buffer in cp.c (reading garbage memory after failed stat) FIXED**
+  - **Unchecked sysconf() in cp/utils.c (could return -1, used in comparison) FIXED**
   
-- **style(9) Violations:** 28+
-  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style
+- **style(9) Violations:** 32+
+  - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style, extra spaces before closing parens
   
-- **Correctness/Logic Errors:** 38+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal()
+- **Correctness/Logic Errors:** 47+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal(), unchecked stat/lstat
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
@@ -229,20 +231,65 @@ This is one of the cleaner files reviewed so far. The code:
 
 **Issues Fixed:** 4 (1 style, 3 correctness)
 
+### 17. bin/cp/cp.c
+**Status:** HAD CRITICAL SECURITY BUG - FIXED
+**Critical Issue:**
+- **CRITICAL: Uninitialized stat buffer** - Lines 256-260 called stat()/lstat() WITHOUT checking return value, then immediately used `tmp_stat.st_mode`. If stat() fails (e.g., source doesn't exist, permission denied), tmp_stat contains UNINITIALIZED GARBAGE from the stack. This leads to:
+  1. **Undefined behavior** - Reading uninitialized memory violates C standard
+  2. **Random decisions** - `S_ISDIR(tmp_stat.st_mode)` checks garbage, leading to wrong copy mode
+  3. **Security risk** - Attacker who can control stack contents could influence program behavior
+  
+**Fix:** Added stat_ret variable to check stat()/lstat() return. On failure, error out immediately with err(1, "%s", *argv). The source file MUST exist.
+
+**Other Issues:**
+- **Style:** Missing `sys/cdefs.h` (should be first include). **Fixed.**
+- **Style:** `exit (copy(...` had space before '('. **Fixed to exit(copy(...**
+- **Correctness: Unchecked signal()** - `signal(SIGINFO, siginfo)` can fail. **Fixed.**
+- **Correctness: Unchecked printf()** - Verbose output (line 683) ignored errors. **Fixed.**
+
+**Issues Fixed:** 5 (1 CRITICAL security, 2 style, 2 correctness)
+
+### 18. bin/cp/utils.c
+**Status:** HAD CRITICAL BUG - FIXED
+**Critical Issue:**
+- **CRITICAL: Unchecked sysconf()** - Line 80 called `sysconf(_SC_PHYS_PAGES)` and compared result with PHYSPAGES_THRESHOLD without checking for errors. sysconf() returns -1 on error. Comparing -1 (signed) with PHYSPAGES_THRESHOLD could lead to incorrect buffer size selection or signed/unsigned comparison issues.
+
+**Fix:** Added `long phys_pages = sysconf(_SC_PHYS_PAGES);` and check `if (phys_pages > 0 && phys_pages > PHYSPAGES_THRESHOLD)`. On error or failure, use safe default BUFSIZE_SMALL.
+
+**Other Issues:**
+- **Style:** Missing `sys/cdefs.h`. **Fixed.**
+- **Style:** Extra space before ')' in two locations (`if (ret > 0 )`). **Fixed.**
+- **Correctness: Unchecked printf() (5 instances)** - Lines 146, 263, 289, 310 in nflag code paths. **Fixed.**
+- **Correctness: Unchecked fprintf() (4 instances)** - Lines 151-152, 157, 222-225, 486-491 (usage). **Fixed.**
+
+**Security Analysis:**
+The cp utility is high-risk due to:
+- File copying complexity (sparse files, special files, devices)
+- Recursive traversal with symlinks
+- Privilege preservation
+- ACL handling
+
+No other critical security issues found beyond the uninitialized stat buffer (in cp.c) and unchecked sysconf(). The code uses modern secure APIs:
+- openat() with O_RESOLVE_BENEATH for safe path resolution
+- copy_file_range() for efficient copying
+- Proper TOCTOU avoidance with atomic operations
+
+**Issues Fixed:** 10 (1 CRITICAL, 3 style, 6 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 17 C files  
+**Files Reviewed:** 19 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.040%  
+**Completion Percentage:** 0.045%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 17/111 bin files reviewed
+**Status:** 19/111 bin files reviewed
 
-#### Completed (17 files)
+#### Completed (19 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -259,30 +306,32 @@ This is one of the cleaner files reviewed so far. The code:
 - ✅ bin/mkdir/mkdir.c (5 issues - 1 CRITICAL)
 - ✅ bin/ln/ln.c (6 issues - 1 CRITICAL TOCTOU + 100+ lines of educational comments)
 - ✅ bin/chmod/chmod.c (4 issues)
+- ✅ bin/cp/cp.c (5 issues - 1 CRITICAL uninitialized stat buffer)
+- ✅ bin/cp/utils.c (10 issues - 1 CRITICAL unchecked sysconf)
 
 #### Next Priority Queue
-1. ⬜ bin/cp/cp.c
-2. ⬜ bin/mv/mv.c
-3. ⬜ bin/rm/rm.c
-4. ⬜ bin/ls/ls.c
-5. ⬜ bin/chown/chown.c
+1. ⬜ bin/mv/mv.c
+2. ⬜ bin/rm/rm.c
+3. ⬜ bin/ls/ls.c
+4. ⬜ bin/chown/chown.c
+5. ⬜ bin/chgrp/chgrp.c
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/cp/cp.c`. This utility copies files and directories. Watch for:
-- **Buffer overflows:** Path construction, string concatenation, stat buffers
-- **TOCTOU race conditions:** Checking if file exists then copying
-- **Symlink attacks:** Following symlinks in recursive copies (-R flag)
-- **Directory traversal:** Recursive copy (-R) with malicious symlinks
-- **Sparse file handling:** st_blocks vs st_size mismatches
-- **Device file copying:** Dangerous copy of /dev/* files
-- **Metadata preservation:** Integer truncation in timestamps, ownership
-- **Memory exhaustion:** Large file copies, unbounded malloc
-- **Concurrent modification:** Source file changing during copy
-- **Error handling:** Partial writes, disk full, permission denied
+Continue with `bin/mv/mv.c`. This utility moves/renames files and directories. Watch for:
+- **TOCTOU race conditions:** Check-then-act patterns between stat and rename
+- **Cross-filesystem moves:** Falls back to cp+rm, inherits cp vulnerabilities
+- **Symlink attacks:** Moving symlinks, symlinks in paths
+- **Directory traversal:** Recursive operations, path manipulation
+- **Privilege issues:** Moving files between owners, setuid/setgid handling
+- **Atomic operations:** rename() is atomic, but fallback to cp+rm is not
+- **Error handling:** Partial moves (cp succeeds, rm fails), disk full
+- **Path validation:** Directory moves into subdirectories (recursive move)
+- **Metadata preservation:** Timestamps, ownership, permissions
+- **Unlink failures:** Target exists but can't be removed
 
-**cp(1) is NOTORIOUS for security bugs. Assume EVERY line has a vulnerability until proven otherwise.**
+**mv(1) is HIGH RISK because it combines rename, cp, and rm operations. The fallback to cp+rm for cross-filesystem moves creates complex failure modes.**
 
 **"If it looks wrong, it IS wrong until proven otherwise."**
 

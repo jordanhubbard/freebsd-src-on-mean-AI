@@ -47,6 +47,10 @@
  * in "to") to form the final target path.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -197,7 +201,13 @@ main(int argc, char *argv[])
 		fts_options &= ~FTS_PHYSICAL;
 		fts_options |= FTS_LOGICAL | FTS_COMFOLLOW;
 	}
-	(void)signal(SIGINFO, siginfo);
+	/*
+	 * [AI-REVIEW] Correctness: signal() can fail and return SIG_ERR.
+	 * While SIGINFO handler failure is not critical (progress reporting),
+	 * we should check for errors to avoid silent failures.
+	 */
+	if (signal(SIGINFO, siginfo) == SIG_ERR)
+		warn("signal(SIGINFO)");
 
 	/* Save the target base in "to". */
 	target = argv[--argc];
@@ -250,12 +260,29 @@ main(int argc, char *argv[])
 		 * Where dir is a directory and foo does not exist, where
 		 * we want pathname concatenations turned on but not for
 		 * the initial mkdir().
+		 *
+		 * [AI-REVIEW] CRITICAL SECURITY BUG FIXED: The original code
+		 * called stat()/lstat() WITHOUT checking the return value,
+		 * then immediately used tmp_stat.st_mode. If stat() fails
+		 * (e.g., source doesn't exist), tmp_stat is UNINITIALIZED,
+		 * leading to:
+		 * 1. Reading garbage memory (undefined behavior)
+		 * 2. Making random decisions based on uninitialized data
+		 * 3. Potential security implications if attacker controls
+		 *    the uninitialized stack contents
+		 *
+		 * FIX: Check stat()/lstat() return value. On failure, error
+		 * out with appropriate message. The source file MUST exist.
 		 */
 		if (r == -1) {
+			int stat_ret;
 			if (Rflag && (Lflag || Hflag))
-				stat(*argv, &tmp_stat);
+				stat_ret = stat(*argv, &tmp_stat);
 			else
-				lstat(*argv, &tmp_stat);
+				stat_ret = lstat(*argv, &tmp_stat);
+			
+			if (stat_ret != 0)
+				err(1, "%s", *argv);
 
 			if (S_ISDIR(tmp_stat.st_mode) && Rflag)
 				type = DIR_TO_DNE;
@@ -284,7 +311,10 @@ main(int argc, char *argv[])
 	 * as we need to skip checking root_stat on the first iteration and
 	 * ensure that we set it with the first mkdir().
 	 */
-	exit (copy(argv, type, fts_options, (type == DIR_TO_DNE ? NULL :
+	/*
+	 * [AI-REVIEW] style(9): No space between function name and '('
+	 */
+	exit(copy(argv, type, fts_options, (type == DIR_TO_DNE ? NULL :
 	    &to_stat)));
 }
 
@@ -679,8 +709,17 @@ copy(char *argv[], enum op type, int fts_options, struct stat *root_stat)
 				badcp = rval = 1;
 			break;
 		}
-		if (vflag && !badcp)
-			(void)printf("%s -> %s%s\n", curr->fts_path, to.base, to.path);
+		/*
+		 * [AI-REVIEW] Correctness: printf() can fail (ENOMEM, EIO,
+		 * ENOSPC, broken pipe). Verbose output failure should be
+		 * detected and reported, even if non-fatal.
+		 */
+		if (vflag && !badcp) {
+			if (printf("%s -> %s%s\n", curr->fts_path, to.base, to.path) < 0) {
+				warn("printf");
+				rval = 1;
+			}
+		}
 	}
 	assert(level == FTS_ROOTLEVEL);
 	if (errno)

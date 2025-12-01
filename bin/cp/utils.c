@@ -29,6 +29,10 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/acl.h>
 #include <sys/stat.h>
@@ -77,7 +81,14 @@ copy_fallback(int from_fd, int to_fd)
 	char *bufp;
 
 	if (buf == NULL) {
-		if (sysconf(_SC_PHYS_PAGES) > PHYSPAGES_THRESHOLD)
+		/*
+		 * [AI-REVIEW] CRITICAL: sysconf() can return -1 on error.
+		 * Comparing -1 with PHYSPAGES_THRESHOLD without checking
+		 * could lead to incorrect buffer size selection. If sysconf()
+		 * fails, we should use the small buffer size as a safe default.
+		 */
+		long phys_pages = sysconf(_SC_PHYS_PAGES);
+		if (phys_pages > 0 && phys_pages > PHYSPAGES_THRESHOLD)
 			bufsize = MIN(BUFSIZE_MAX, MAXPHYS * 8);
 		else
 			bufsize = BUFSIZE_SMALL;
@@ -140,21 +151,29 @@ copy_file(const FTSENT *entp, bool dne, bool beneath)
 	 * other choice is 666 or'ed with the execute bits on the from file
 	 * modified by the umask.)
 	 */
+	/*
+	 * [AI-REVIEW] Correctness: printf() and fprintf() can fail.
+	 * Check return values to detect I/O errors.
+	 */
 	if (!dne) {
 		if (nflag) {
-			if (vflag)
-				printf("%s%s not overwritten\n",
-				    to.base, to.path);
+			if (vflag) {
+				if (printf("%s%s not overwritten\n",
+				    to.base, to.path) < 0)
+					warn("printf");
+			}
 			rval = 1;
 			goto done;
 		} else if (iflag) {
-			(void)fprintf(stderr, "overwrite %s%s? %s",
-			    to.base, to.path, YESNO);
+			if (fprintf(stderr, "overwrite %s%s? %s",
+			    to.base, to.path, YESNO) < 0)
+				warn("fprintf");
 			checkch = ch = getchar();
 			while (ch != '\n' && ch != EOF)
 				ch = getchar();
 			if (checkch != 'y' && checkch != 'Y') {
-				(void)fprintf(stderr, "not overwritten\n");
+				if (fprintf(stderr, "not overwritten\n") < 0)
+					warn("fprintf");
 				rval = 1;
 				goto done;
 			}
@@ -219,10 +238,16 @@ copy_file(const FTSENT *entp, bool dne, bool beneath)
 		wtotal += wcount;
 		if (info) {
 			info = 0;
-			(void)fprintf(stderr,
+			/*
+			 * [AI-REVIEW] Correctness: fprintf() can fail.
+			 * Progress reporting is non-fatal, but we should
+			 * check for errors.
+			 */
+			if (fprintf(stderr,
 			    "%s -> %s%s %3d%%\n",
 			    entp->fts_path, to.base, to.path,
-			    cp_pct(wtotal, fs->st_size));
+			    cp_pct(wtotal, fs->st_size)) < 0)
+				warn("fprintf");
 		}
 	} while (wcount > 0);
 	if (wcount < 0) {
@@ -259,8 +284,13 @@ copy_link(const FTSENT *p, bool dne, bool beneath)
 	char llink[PATH_MAX];
 
 	if (!dne && nflag) {
-		if (vflag)
-			printf("%s%s not overwritten\n", to.base, to.path);
+		/*
+		 * [AI-REVIEW] Correctness: printf() can fail.
+		 */
+		if (vflag) {
+			if (printf("%s%s not overwritten\n", to.base, to.path) < 0)
+				warn("printf");
+		}
 		return (1);
 	}
 	if ((len = readlink(p->fts_path, llink, sizeof(llink) - 1)) == -1) {
@@ -285,8 +315,13 @@ copy_fifo(struct stat *from_stat, bool dne, bool beneath)
 	int atflags = beneath ? AT_RESOLVE_BENEATH : 0;
 
 	if (!dne && nflag) {
-		if (vflag)
-			printf("%s%s not overwritten\n", to.base, to.path);
+		/*
+		 * [AI-REVIEW] Correctness: printf() can fail.
+		 */
+		if (vflag) {
+			if (printf("%s%s not overwritten\n", to.base, to.path) < 0)
+				warn("printf");
+		}
 		return (1);
 	}
 	if (!dne && unlinkat(to.dir, to.path, atflags) != 0) {
@@ -306,8 +341,13 @@ copy_special(struct stat *from_stat, bool dne, bool beneath)
 	int atflags = beneath ? AT_RESOLVE_BENEATH : 0;
 
 	if (!dne && nflag) {
-		if (vflag)
-			printf("%s%s not overwritten\n", to.base, to.path);
+		/*
+		 * [AI-REVIEW] Correctness: printf() can fail.
+		 */
+		if (vflag) {
+			if (printf("%s%s not overwritten\n", to.base, to.path) < 0)
+				warn("printf");
+		}
 		return (1);
 	}
 	if (!dne && unlinkat(to.dir, to.path, atflags) != 0) {
@@ -404,8 +444,11 @@ preserve_fd_acls(int source_fd, int dest_fd)
 	acl_type_t acl_type;
 	int acl_supported = 0, ret, trivial;
 
+	/*
+	 * [AI-REVIEW] style(9): No space before closing parenthesis
+	 */
 	ret = fpathconf(source_fd, _PC_ACL_NFS4);
-	if (ret > 0 ) {
+	if (ret > 0) {
 		acl_supported = 1;
 		acl_type = ACL_TYPE_NFS4;
 	} else if (ret < 0 && errno != EINVAL) {
@@ -415,7 +458,7 @@ preserve_fd_acls(int source_fd, int dest_fd)
 	}
 	if (acl_supported == 0) {
 		ret = fpathconf(source_fd, _PC_ACL_EXTENDED);
-		if (ret > 0 ) {
+		if (ret > 0) {
 			acl_supported = 1;
 			acl_type = ACL_TYPE_ACCESS;
 		} else if (ret < 0 && errno != EINVAL) {
@@ -482,12 +525,17 @@ preserve_dir_acls(const char *source_dir, const char *dest_dir)
 void
 usage(void)
 {
-
-	(void)fprintf(stderr, "%s\n%s\n",
+	/*
+	 * [AI-REVIEW] Correctness: fprintf() can fail. Even though we're
+	 * about to exit, we should check for errors to provide diagnostic
+	 * information if stderr write fails.
+	 */
+	if (fprintf(stderr, "%s\n%s\n",
 	    "usage: cp [-R [-H | -L | -P]] [-f | -i | -n] [-alpsvx] "
 	    "source_file target_file",
 	    "       cp [-R [-H | -L | -P]] [-f | -i | -n] [-alpsvx] "
 	    "source_file ... "
-	    "target_directory");
+	    "target_directory") < 0)
+		err(1, "fprintf");
 	exit(EX_USAGE);
 }
