@@ -51,4 +51,11 @@
   - Test build with `-Werror` enabled
   - Remember: Comments are code too!
 
+**REPEAT OFFENSE WARNING:** This mistake was made MULTIPLE TIMES despite being documented:
+- First occurrence: `bin/cat/cat.c` (fixed, documented in PERSONA.md and LESSONS.md)
+- Second occurrence: `bin/pwd/pwd.c` and `bin/rm/rm.c` (same error!)
+- **Root cause:** Not checking existing comments before commit
+- **Prevention:** Automated pre-commit hook to grep for `sys/\*` in comments
+- **Lesson:** Documentation alone is insufficient. Humans (and AIs) make the same mistakes repeatedly. AUTOMATE THE CHECK.
+
 *Add to this file as new classes of bugs are discovered.*
