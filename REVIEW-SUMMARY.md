@@ -11,11 +11,11 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 28 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile)
-- **Lines of Code Analyzed:** ~10400
-- **Issues Identified:** 150 distinct problems
-- **Issues Documented:** 150
-- **CRITICAL BUGS FIXED:** 12 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2)
+- **Files Reviewed:** 29 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date)
+- **Lines of Code Analyzed:** ~10900
+- **Issues Identified:** 158 distinct problems
+- **Issues Documented:** 158
+- **CRITICAL BUGS FIXED:** 13 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow)
 
 ### Severity Breakdown
 
@@ -411,20 +411,49 @@ No security issues found. The utility reads kernel data structures and displays 
 
 **Issues Fixed:** 1 (1 style)
 
+### 28. bin/date/date.c
+**Status:** HAD CRITICAL SECURITY BUG - FIXED
+**Issues:**
+- **CRITICAL: Integer overflow in -r flag** strtoimax() to time_t without range check. **Fixed.**
+- **Unchecked printf** in printdate() - scripts need to know if output failed. **Fixed.**
+- **Unchecked fprintf** in setthetime() error messages (2x). **Fixed.**
+- **Unchecked fprintf** in vary_apply() error path. **Fixed.**
+- **Unchecked fprintf** in usage(). **Fixed.**
+- **Unchecked gettimeofday** (2x) in audit trail logging. **Fixed.**
+- **Unchecked pututxline** (2x) in audit trail logging. **Fixed.**
+- **Unchecked strftime_ns** return value. **Fixed.**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+
+**Code Analysis:**
+date is a PRIVILEGED utility (~500 lines) that sets the system clock:
+- Parses time strings in multiple formats (MMDDhhmm, custom formats via strptime)
+- Uses mktime(), clock_settime() for system clock modification
+- Logs time changes to utmp/wtmp via pututxline() for audit trail
+- Supports ISO 8601, RFC 2822 output formats
+- Implements custom %N (nanosecond) format extension
+
+**CRITICAL BUG:** The -r flag accepts a time value via strtoimax() which returns intmax_t, then assigns it directly to ts.tv_sec (time_t) without range checking. An attacker could supply a value > TIME_MAX or < TIME_MIN causing undefined behavior in time functions. This is a SECURITY BUG because date(1) runs with elevated privileges when setting the system clock.
+
+**Audit Trail Issues:** gettimeofday() and pututxline() calls were unchecked. These functions log time changes to utmp/wtmp for security auditing. If they fail silently, the audit trail is broken - system administrators won't know who changed the time. This is SECURITY-RELEVANT.
+
+**Dangerous Code:** The ATOI2 macro assumes its input is validated digits but the validation happens hundreds of lines away. Added extensive documentation warning future maintainers about this fragile dependency.
+
+**Issues Fixed:** 8 (1 CRITICAL security, 1 style, 6 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 28 C files  
+**Files Reviewed:** 29 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.066%  
+**Completion Percentage:** 0.069%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 28/111 bin files reviewed
+**Status:** 29/111 bin files reviewed
 
-#### Completed (28 files)
+#### Completed (29 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -452,13 +481,14 @@ No security issues found. The utility reads kernel data structures and displays 
 - ✅ bin/dd/dd.c (4 issues)
 - ✅ bin/df/df.c (1 issue)
 - ✅ bin/ps/ps.c (1 issue)
+- ✅ bin/date/date.c (8 issues - 1 CRITICAL integer overflow)
 
 #### Next Priority Queue
-1. ⬜ bin/date/date.c
-2. ⬜ bin/test/test.c
-3. ⬜ bin/test/test.c
-4. ⬜ bin/expr/expr.y
-5. ⬜ bin/ed/main.c
+1. ⬜ bin/test/test.c
+2. ⬜ bin/expr/expr.y
+3. ⬜ bin/ed/main.c
+4. ⬜ bin/pax/pax.c
+5. ⬜ bin/sh/main.c
 
 ---
 
