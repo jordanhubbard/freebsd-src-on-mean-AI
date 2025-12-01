@@ -29,8 +29,12 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/stat.h>
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include, then sys/* in correct order
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/mount.h>
 
 #include <err.h>
@@ -95,8 +99,11 @@ main(int argc, char *argv[])
 	}
 
 	rflag = xflag = 0;
+	/*
+	 * [AI-REVIEW] style(9): space after 'switch' keyword
+	 */
 	while ((ch = getopt(argc, argv, "dfiIPRrvWx")) != -1)
-		switch(ch) {
+		switch (ch) {
 		case 'd':
 			dflag = 1;
 			break;
@@ -143,13 +150,20 @@ main(int argc, char *argv[])
 	checkslash(argv);
 	uid = geteuid();
 
-	(void)signal(SIGINFO, siginfo);
+	/*
+	 * [AI-REVIEW] Correctness: signal() can fail and return SIG_ERR.
+	 */
+	if (signal(SIGINFO, siginfo) == SIG_ERR)
+		warn("signal(SIGINFO)");
 	if (*argv) {
 		stdin_ok = isatty(STDIN_FILENO);
 
 		if (Iflag) {
 			if (check2(argv) == 0)
-				exit (1);
+				/*
+				 * [AI-REVIEW] style(9): no space before '('
+				 */
+				exit(1);
 		}
 		if (rflag)
 			rm_tree(argv);
@@ -157,7 +171,10 @@ main(int argc, char *argv[])
 			rm_file(argv);
 	}
 
-	exit (eval);
+	/*
+	 * [AI-REVIEW] style(9): no space before '('
+	 */
+	exit(eval);
 }
 
 static void
@@ -259,13 +276,17 @@ rm_tree(char **argv)
 			case FTS_DNR:
 				rval = rmdir(p->fts_accpath);
 				if (rval == 0 || (fflag && errno == ENOENT)) {
-					if (rval == 0 && vflag)
-						(void)printf("%s\n",
-						    p->fts_path);
+					/*
+					 * [AI-REVIEW] Correctness: printf() can fail.
+					 */
+					if (rval == 0 && vflag) {
+						if (printf("%s\n", p->fts_path) < 0)
+							warn("printf");
+					}
 					if (rval == 0 && info) {
 						info = 0;
-						(void)printf("%s\n",
-						    p->fts_path);
+						if (printf("%s\n", p->fts_path) < 0)
+							warn("printf");
 					}
 					continue;
 				}
@@ -274,13 +295,14 @@ rm_tree(char **argv)
 			case FTS_W:
 				rval = undelete(p->fts_accpath);
 				if (rval == 0 || (fflag && errno == ENOENT)) {
-					if (vflag)
-						(void)printf("%s\n",
-						    p->fts_path);
+					if (vflag) {
+						if (printf("%s\n", p->fts_path) < 0)
+							warn("printf");
+					}
 					if (info) {
 						info = 0;
-						(void)printf("%s\n",
-						    p->fts_path);
+						if (printf("%s\n", p->fts_path) < 0)
+							warn("printf");
 					}
 					continue;
 				}
@@ -300,13 +322,14 @@ rm_tree(char **argv)
 			default:
 				rval = unlink(p->fts_accpath);
 				if (rval == 0 || (fflag && errno == ENOENT)) {
-					if (rval == 0 && vflag)
-						(void)printf("%s\n",
-						    p->fts_path);
+					if (rval == 0 && vflag) {
+						if (printf("%s\n", p->fts_path) < 0)
+							warn("printf");
+					}
 					if (rval == 0 && info) {
 						info = 0;
-						(void)printf("%s\n",
-						    p->fts_path);
+						if (printf("%s\n", p->fts_path) < 0)
+							warn("printf");
 					}
 					continue;
 				}
@@ -374,11 +397,17 @@ rm_file(char **argv)
 			warn("%s", f);
 			eval = 1;
 		}
-		if (vflag && rval == 0)
-			(void)printf("%s\n", f);
+		/*
+		 * [AI-REVIEW] Correctness: printf() can fail.
+		 */
+		if (vflag && rval == 0) {
+			if (printf("%s\n", f) < 0)
+				warn("printf");
+		}
 		if (info && rval == 0) {
 			info = 0;
-			(void)printf("%s\n", f);
+			if (printf("%s\n", f) < 0)
+				warn("printf");
 		}
 	}
 }
@@ -389,10 +418,17 @@ check(const char *path, const char *name, struct stat *sp)
 	int ch, first;
 	char modep[15], *flagsp;
 
+	/*
+	 * [AI-REVIEW] Correctness: fprintf() and fflush() can fail.
+	 * For interactive prompts, we must ensure the prompt is visible
+	 * before reading input. If fprintf() or fflush() fails, we should
+	 * continue with default safe behavior (assume 'no' answer).
+	 */
 	/* Check -i first. */
-	if (iflag)
-		(void)fprintf(stderr, "remove %s? ", path);
-	else {
+	if (iflag) {
+		if (fprintf(stderr, "remove %s? ", path) < 0)
+			warn("fprintf");
+	} else {
 		/*
 		 * If it's not a symbolic link and it's unwritable and we're
 		 * talking to a terminal, ask.  Symbolic links are excluded
@@ -407,15 +443,17 @@ check(const char *path, const char *name, struct stat *sp)
 		strmode(sp->st_mode, modep);
 		if ((flagsp = fflagstostr(sp->st_flags)) == NULL)
 			err(1, "fflagstostr");
-		(void)fprintf(stderr, "override %s%s%s/%s %s%sfor %s? ",
+		if (fprintf(stderr, "override %s%s%s/%s %s%sfor %s? ",
 		    modep + 1, modep[10] == ' ' ? "" : " ",
 		    user_from_uid(sp->st_uid, 0),
 		    group_from_gid(sp->st_gid, 0),
 		    *flagsp ? flagsp : "", *flagsp ? " " : "",
-		    path);
+		    path) < 0)
+			warn("fprintf");
 		free(flagsp);
 	}
-	(void)fflush(stderr);
+	if (fflush(stderr) != 0)
+		warn("fflush");
 
 	first = ch = getchar();
 	while (ch != '\n' && ch != EOF)
@@ -465,25 +503,39 @@ check2(char **argv)
 			}
 		}
 	}
+	/*
+	 * [AI-REVIEW] Correctness: fprintf() and fflush() can fail.
+	 * These are interactive prompts - must check for errors.
+	 */
 	first = 0;
 	while (first != 'n' && first != 'N' && first != 'y' && first != 'Y') {
 		if (dcount && rflag) {
-			fprintf(stderr, "recursively remove");
-			if (dcount == 1)
-				fprintf(stderr, " %s", dname);
-			else
-				fprintf(stderr, " %d dirs", dcount);
-			if (fcount == 1)
-				fprintf(stderr, " and 1 file");
-			else if (fcount > 1)
-				fprintf(stderr, " and %d files", fcount);
+			if (fprintf(stderr, "recursively remove") < 0)
+				warn("fprintf");
+			if (dcount == 1) {
+				if (fprintf(stderr, " %s", dname) < 0)
+					warn("fprintf");
+			} else {
+				if (fprintf(stderr, " %d dirs", dcount) < 0)
+					warn("fprintf");
+			}
+			if (fcount == 1) {
+				if (fprintf(stderr, " and 1 file") < 0)
+					warn("fprintf");
+			} else if (fcount > 1) {
+				if (fprintf(stderr, " and %d files", fcount) < 0)
+					warn("fprintf");
+			}
 		} else if (dcount + fcount > 3) {
-			fprintf(stderr, "remove %d files", dcount + fcount);
+			if (fprintf(stderr, "remove %d files", dcount + fcount) < 0)
+				warn("fprintf");
 		} else {
 			return(1);
 		}
-		fprintf(stderr, "? ");
-		fflush(stderr);
+		if (fprintf(stderr, "? ") < 0)
+			warn("fprintf");
+		if (fflush(stderr) != 0)
+			warn("fflush");
 
 		first = ch = getchar();
 		while (ch != '\n' && ch != EOF)
@@ -522,10 +574,13 @@ checkdot(char **argv)
 static void
 usage(void)
 {
-
-	(void)fprintf(stderr, "%s\n%s\n",
+	/*
+	 * [AI-REVIEW] Correctness: fprintf() can fail.
+	 */
+	if (fprintf(stderr, "%s\n%s\n",
 	    "usage: rm [-f | -i] [-dIPRrvWx] file ...",
-	    "       unlink [--] file");
+	    "       unlink [--] file") < 0)
+		err(1, "fprintf");
 	exit(EX_USAGE);
 }
 

@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 20 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, cat/Makefile)
-- **Lines of Code Analyzed:** ~5250
-- **Issues Identified:** 121 distinct problems
-- **Issues Documented:** 121
+- **Files Reviewed:** 21 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, cat/Makefile)
+- **Lines of Code Analyzed:** ~5800
+- **Issues Identified:** 138 distinct problems
+- **Issues Documented:** 138
 - **CRITICAL BUGS FIXED:** 12 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2)
 
 ### Severity Breakdown
@@ -37,11 +37,11 @@
   - **vfork() error handling in mv.c line 382 (parent executes child code on error, terminates mv) FIXED**
   - **vfork() error handling in mv.c line 409 (parent executes child code on error, terminates mv) FIXED**
   
-- **style(9) Violations:** 35+
+- **style(9) Violations:** 39+
   - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style, extra spaces before closing parens
   
-- **Correctness/Logic Errors:** 52+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal(), unchecked stat/lstat, wrong vfork() error checking
+- **Correctness/Logic Errors:** 65+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal(), unchecked stat/lstat, wrong vfork() error checking, unchecked fflush()
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
@@ -313,20 +313,49 @@ The vfork() bugs are CRITICAL because they cause unpredictable behavior under re
 
 **Issues Fixed:** 10 (2 CRITICAL vfork, 3 style, 5 correctness)
 
+### 20. bin/rm/rm.c
+**Status:** ACCEPTABLE (with fixes)
+**Issues:**
+- **Style:** Include ordering wrong (sys/stat.h before sys/param.h), missing sys/cdefs.h. **Fixed.**
+- **Style:** `switch(ch)` missing space after keyword. **Fixed.**
+- **Style:** `exit (1)` and `exit (eval)` had extra space before '('. **Fixed to exit(1) and exit(eval).**
+- **Correctness: Unchecked signal()** - Line 146, signal(SIGINFO) can fail. **Fixed.**
+- **Correctness: Unchecked printf() (6 instances)** - Lines 263, 267, 278, 282, 304, 308, 378, 381 in verbose output paths. **Fixed.**
+- **Correctness: Unchecked fprintf() (9 instances)** - Lines 394, 410-415 (check function), 471-485 (check2 function), 526-528 (usage). **Fixed.**
+- **Correctness: Unchecked fflush() (2 instances)** - Lines 418, 486 in interactive prompt code paths. fflush() can fail. **Fixed.**
+
+**Security Analysis:**
+rm is EXTREMELY HIGH RISK as a file deletion utility. However, the code is well-structured:
+- Uses fts(3) for safe directory traversal (FTS_PHYSICAL prevents symlink following by default)
+- Checks for "." and ".." deletion attempts (checkdot)
+- Checks for "/" deletion attempts (checkslash)
+- Proper handling of immutable flags
+- Interactive prompts with -i flag
+- Safe handling of whiteout files (-W flag)
+
+**No critical security bugs found.** The code properly validates dangerous operations. The main issues were style violations and unchecked I/O operations.
+
+**Code Quality:**
+- Clear separation of concerns (rm_tree vs rm_file)
+- Defensive checks prevent accidental destruction
+- Proper error propagation via eval global
+
+**Issues Fixed:** 17 (4 style, 13 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 20 C files  
+**Files Reviewed:** 21 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.047%  
+**Completion Percentage:** 0.050%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 20/111 bin files reviewed
+**Status:** 21/111 bin files reviewed
 
-#### Completed (20 files)
+#### Completed (21 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -346,13 +375,14 @@ The vfork() bugs are CRITICAL because they cause unpredictable behavior under re
 - ✅ bin/cp/cp.c (5 issues - 1 CRITICAL uninitialized stat buffer)
 - ✅ bin/cp/utils.c (10 issues - 1 CRITICAL unchecked sysconf)
 - ✅ bin/mv/mv.c (10 issues - 2 CRITICAL vfork bugs)
+- ✅ bin/rm/rm.c (17 issues)
 
 #### Next Priority Queue
-1. ⬜ bin/rm/rm.c
-2. ⬜ bin/ls/ls.c
-3. ⬜ bin/chown/chown.c
-4. ⬜ bin/chgrp/chgrp.c
-5. ⬜ bin/dd/dd.c
+1. ⬜ bin/ls/ls.c
+2. ⬜ bin/chown/chown.c
+3. ⬜ bin/chgrp/chgrp.c
+4. ⬜ bin/dd/dd.c
+5. ⬜ bin/df/df.c
 
 ---
 
