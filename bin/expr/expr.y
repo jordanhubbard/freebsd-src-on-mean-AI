@@ -6,6 +6,12 @@
  * Largely rewritten by J.T. Conklin (jtc@wimsey.com)
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then sys/... headers alphabetically.
+ * Note: sys/cdefs.h is crucial for __unused and other system macros.
+ */
+#include <sys/cdefs.h>
 #include <sys/types.h>
 
 #include <ctype.h>
@@ -288,10 +294,20 @@ main(int argc, char *argv[])
 
 	yyparse();
 
-	if (result->type == integer)
-		printf("%jd\n", result->u.i);
-	else
-		printf("%s\n", result->u.s);
+	/*
+	 * FIXED: Unchecked printf
+	 * expr(1) is used in shell scripts for expression evaluation.
+	 * If stdout fails (broken pipe, disk full), the script needs
+	 * to know via a non-zero exit code. Silently failing would cause
+	 * scripts to use uninitialized variables or make wrong decisions.
+	 */
+	if (result->type == integer) {
+		if (printf("%jd\n", result->u.i) < 0)
+			err(ERR_EXIT, "printf");
+	} else {
+		if (printf("%s\n", result->u.s) < 0)
+			err(ERR_EXIT, "printf");
+	}
 
 	return (is_zero_or_null(result));
 }
@@ -529,6 +545,34 @@ op_colon(struct val *a, struct val *b)
 	int eval;
 	struct val *v;
 
+	/*
+	 * SECURITY NOTE: Regular expression handling
+	 * 
+	 * The colon operator performs regex matching: expr STRING : REGEX
+	 * User-supplied regex patterns are compiled and executed here.
+	 * 
+	 * ATTACK VECTORS:
+	 * 1. ReDoS (Regular Expression Denial of Service):
+	 *    Pathological patterns like (a+)+ can cause exponential
+	 *    backtracking, hanging the process indefinitely.
+	 *    Example: expr "aaaaaaaaaaaaaaaaaaaaa" : "(a+)+"
+	 *    This is NOT fixed here - it's a limitation of the regex engine.
+	 * 
+	 * 2. Resource exhaustion:
+	 *    Complex patterns with many capture groups can consume
+	 *    excessive memory during compilation.
+	 * 
+	 * MITIGATION:
+	 * - We use POSIX basic regex (flags=0), not extended regex,
+	 *   which limits pattern complexity somewhat.
+	 * - regcomp() errors are properly checked and reported.
+	 * - regexec() return value is checked before accessing matches.
+	 * 
+	 * LESSON: Never trust user-supplied regex patterns without limits.
+	 * Production systems should use REG_NOSUB when captures aren't
+	 * needed, and impose timeouts on regex execution.
+	 */
+	
 	/* coerce both arguments to strings */
 	to_string(a);
 	to_string(b);
@@ -541,18 +585,27 @@ op_colon(struct val *a, struct val *b)
 
 	/* compare string against pattern */
 	/* remember that patterns are anchored to the beginning of the line */
-	if (regexec(&rp, a->u.s, (size_t)2, rm, 0) == 0 && rm[0].rm_so == 0)
+	if (regexec(&rp, a->u.s, (size_t)2, rm, 0) == 0 && rm[0].rm_so == 0) {
 		if (rm[1].rm_so >= 0) {
+			/*
+			 * Captured subexpression found. Null-terminate at end of match.
+			 * This modifies a->u.s which is safe because:
+			 * 1. We allocated it via strdup() in make_str()
+			 * 2. regexec() guarantees rm[1].rm_eo <= strlen(a->u.s)
+			 * 3. We own this string and will free it shortly
+			 */
 			*(a->u.s + rm[1].rm_eo) = '\0';
 			v = make_str(a->u.s + rm[1].rm_so);
-
-		} else
+		} else {
+			/* No capture group, return match length */
 			v = make_integer((intmax_t)(rm[0].rm_eo));
-	else
+		}
+	} else {
 		if (rp.re_nsub == 0)
 			v = make_integer((intmax_t)0);
 		else
 			v = make_str("");
+	}
 
 	/* free arguments and pattern buffer */
 	free_value(a);
