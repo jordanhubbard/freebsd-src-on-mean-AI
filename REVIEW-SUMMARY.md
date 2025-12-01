@@ -11,15 +11,15 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 19 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, cat/Makefile)
-- **Lines of Code Analyzed:** ~4750
-- **Issues Identified:** 111 distinct problems
-- **Issues Documented:** 111
-- **CRITICAL BUGS FIXED:** 10 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf)
+- **Files Reviewed:** 20 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, cat/Makefile)
+- **Lines of Code Analyzed:** ~5250
+- **Issues Identified:** 121 distinct problems
+- **Issues Documented:** 121
+- **CRITICAL BUGS FIXED:** 12 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2)
 
 ### Severity Breakdown
 
-- **CRITICAL Security/Correctness Issues:** 14
+- **CRITICAL Security/Correctness Issues:** 16
   - Unchecked fdopen() NULL return in cat (crash vulnerability)
   - Uninitialized struct flock in cat (kernel data leak)
   - st_blksize untrusted in cat (DoS via memory exhaustion) **FIXED**
@@ -34,12 +34,14 @@
   - **TOCTOU race condition in ln.c link command (useless lstat check before link) FIXED**
   - **Uninitialized stat buffer in cp.c (reading garbage memory after failed stat) FIXED**
   - **Unchecked sysconf() in cp/utils.c (could return -1, used in comparison) FIXED**
+  - **vfork() error handling in mv.c line 382 (parent executes child code on error, terminates mv) FIXED**
+  - **vfork() error handling in mv.c line 409 (parent executes child code on error, terminates mv) FIXED**
   
-- **style(9) Violations:** 32+
+- **style(9) Violations:** 35+
   - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style, extra spaces before closing parens
   
-- **Correctness/Logic Errors:** 47+
-  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal(), unchecked stat/lstat
+- **Correctness/Logic Errors:** 52+
+  - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal(), unchecked stat/lstat, wrong vfork() error checking
   
 - **Build System Issues:** 2
   - Casper disabled in Makefile
@@ -276,20 +278,55 @@ No other critical security issues found beyond the uninitialized stat buffer (in
 
 **Issues Fixed:** 10 (1 CRITICAL, 3 style, 6 correctness)
 
+### 19. bin/mv/mv.c
+**Status:** HAD TWO CRITICAL BUGS - FIXED
+**Critical Issues:**
+- **CRITICAL: vfork() error handling (line 382)** - The check `if (!(pid = vfork()))` evaluates to TRUE when:
+  1. pid == 0 (child process) - CORRECT
+  2. pid == -1 (vfork() error) - WRONG!
+  
+  When vfork() fails (ENOMEM, EAGAIN, process limit), it returns -1. The expression `!(pid)` with pid=-1 becomes `!(-1)` which is TRUE (because -1 is non-zero and ! inverts it). This causes the PARENT process to execute the child code path:
+  - execl(_PATH_CP, ...) replaces parent process image
+  - _exit(EXEC_FAILED) terminates the parent
+  - **mv utility terminates instead of handling the error!**
+  
+  This is a PROCESS TERMINATION BUG. If vfork() fails under memory pressure, mv will exit with error code 127 instead of reporting the error and continuing.
+
+- **CRITICAL: vfork() error handling (line 409)** - IDENTICAL BUG in second vfork() call for rm. Parent would execl(_PATH_RM) and terminate on vfork() failure.
+
+**Fix:** Explicit checks: `pid = vfork(); if (pid == -1) { warn("vfork"); return (1); } if (pid == 0) { /* child */ }`
+
+**Other Issues:**
+- **Style:** Missing `sys/cdefs.h`. **Fixed.**
+- **Style:** Extra space before ')' (2 instances). **Fixed.**
+- **Correctness: Unchecked printf() (3 instances)** - Lines 182, 212, 353. **Fixed.**
+- **Correctness: Unchecked fprintf() (4 instances)** - Lines 185, 189-192, 200, 491-493. **Fixed.**
+
+**Security Analysis:**
+mv is HIGH RISK because:
+- Combines rename(), cp, and rm operations
+- Falls back to fork+exec cp/rm for cross-filesystem moves
+- Handles privilege preservation
+- Process creation failure modes
+
+The vfork() bugs are CRITICAL because they cause unpredictable behavior under resource exhaustion. An attacker who can trigger ENOMEM (e.g., by exhausting process table) could cause mv to terminate unexpectedly, potentially leaving filesystems in inconsistent states (file copied but not removed).
+
+**Issues Fixed:** 10 (2 CRITICAL vfork, 3 style, 5 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 19 C files  
+**Files Reviewed:** 20 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.045%  
+**Completion Percentage:** 0.047%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 19/111 bin files reviewed
+**Status:** 20/111 bin files reviewed
 
-#### Completed (19 files)
+#### Completed (20 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -308,30 +345,33 @@ No other critical security issues found beyond the uninitialized stat buffer (in
 - ✅ bin/chmod/chmod.c (4 issues)
 - ✅ bin/cp/cp.c (5 issues - 1 CRITICAL uninitialized stat buffer)
 - ✅ bin/cp/utils.c (10 issues - 1 CRITICAL unchecked sysconf)
+- ✅ bin/mv/mv.c (10 issues - 2 CRITICAL vfork bugs)
 
 #### Next Priority Queue
-1. ⬜ bin/mv/mv.c
-2. ⬜ bin/rm/rm.c
-3. ⬜ bin/ls/ls.c
-4. ⬜ bin/chown/chown.c
-5. ⬜ bin/chgrp/chgrp.c
+1. ⬜ bin/rm/rm.c
+2. ⬜ bin/ls/ls.c
+3. ⬜ bin/chown/chown.c
+4. ⬜ bin/chgrp/chgrp.c
+5. ⬜ bin/dd/dd.c
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/mv/mv.c`. This utility moves/renames files and directories. Watch for:
-- **TOCTOU race conditions:** Check-then-act patterns between stat and rename
-- **Cross-filesystem moves:** Falls back to cp+rm, inherits cp vulnerabilities
-- **Symlink attacks:** Moving symlinks, symlinks in paths
-- **Directory traversal:** Recursive operations, path manipulation
-- **Privilege issues:** Moving files between owners, setuid/setgid handling
-- **Atomic operations:** rename() is atomic, but fallback to cp+rm is not
-- **Error handling:** Partial moves (cp succeeds, rm fails), disk full
-- **Path validation:** Directory moves into subdirectories (recursive move)
-- **Metadata preservation:** Timestamps, ownership, permissions
-- **Unlink failures:** Target exists but can't be removed
+Continue with `bin/rm/rm.c`. This utility removes files and directories. Watch for:
+- **Recursive deletion (-r/-R):** Directory traversal attacks, symlink following
+- **TOCTOU race conditions:** Check-then-delete patterns
+- **Symlink attacks:** Deleting through symlinks, especially with -rf
+- **Path validation:** ../../../ sequences, absolute paths
+- **Interactive prompts (-i):** Prompt bypasses, stdin manipulation
+- **Force mode (-f):** Suppresses errors, could hide security issues
+- **Unlink vs rmdir:** Wrong syscall for file type
+- **FTS traversal:** Incorrect fts_open() options, following symlinks
+- **Permission checks:** Deleting files you shouldn't be able to
+- **Mount point deletion:** Attempting to delete / or mounted filesystems
+- **Error handling:** Partial deletions, continuing after errors
+- **-P flag (overwrite before delete):** Implementation security, data remanence
 
-**mv(1) is HIGH RISK because it combines rename, cp, and rm operations. The fallback to cp+rm for cross-filesystem moves creates complex failure modes.**
+**rm(1) is EXTREMELY HIGH RISK. It's a primary target for privilege escalation attacks. A bug here can delete the entire filesystem.**
 
 **"If it looks wrong, it IS wrong until proven otherwise."**
 

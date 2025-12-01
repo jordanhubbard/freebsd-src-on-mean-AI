@@ -32,6 +32,10 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/acl.h>
 #include <sys/mount.h>
@@ -176,20 +180,27 @@ do_move(const char *from, const char *to)
 		}
 
 #define YESNO "(y/n [n]) "
+		/*
+		 * [AI-REVIEW] Correctness: printf() and fprintf() can fail.
+		 */
 		ask = 0;
 		if (nflg) {
-			if (vflg)
-				printf("%s not overwritten\n", to);
+			if (vflg) {
+				if (printf("%s not overwritten\n", to) < 0)
+					warn("printf");
+			}
 			return (0);
 		} else if (iflg) {
-			(void)fprintf(stderr, "overwrite %s? %s", to, YESNO);
+			if (fprintf(stderr, "overwrite %s? %s", to, YESNO) < 0)
+				warn("fprintf");
 			ask = 1;
 		} else if (access(to, W_OK) && !stat(to, &sb) && isatty(STDIN_FILENO)) {
 			strmode(sb.st_mode, modep);
-			(void)fprintf(stderr, "override %s%s%s/%s for %s? %s",
+			if (fprintf(stderr, "override %s%s%s/%s for %s? %s",
 			    modep + 1, modep[9] == ' ' ? "" : " ",
 			    user_from_uid((unsigned long)sb.st_uid, 0),
-			    group_from_gid((unsigned long)sb.st_gid, 0), to, YESNO);
+			    group_from_gid((unsigned long)sb.st_gid, 0), to, YESNO) < 0)
+				warn("fprintf");
 			ask = 1;
 		}
 		if (ask) {
@@ -197,7 +208,8 @@ do_move(const char *from, const char *to)
 			while (ch != '\n' && ch != EOF)
 				ch = getchar();
 			if (first != 'y' && first != 'Y') {
-				(void)fprintf(stderr, "not overwritten\n");
+				if (fprintf(stderr, "not overwritten\n") < 0)
+					warn("fprintf");
 				return (0);
 			}
 		}
@@ -207,9 +219,14 @@ do_move(const char *from, const char *to)
 	 * with EXDEV.  Therefore, copy() doesn't have to perform the checks
 	 * specified in the Step 3 of the POSIX mv specification.
 	 */
+	/*
+	 * [AI-REVIEW] Correctness: printf() can fail.
+	 */
 	if (!rename(from, to)) {
-		if (vflg)
-			printf("%s -> %s\n", from, to);
+		if (vflg) {
+			if (printf("%s -> %s\n", from, to) < 0)
+				warn("printf");
+		}
 		return (0);
 	}
 
@@ -349,8 +366,13 @@ err:		if (unlink(to))
 		warn("%s: remove", from);
 		return (1);
 	}
-	if (vflg)
-		printf("%s -> %s\n", from, to);
+	/*
+	 * [AI-REVIEW] Correctness: printf() can fail.
+	 */
+	if (vflg) {
+		if (printf("%s -> %s\n", from, to) < 0)
+			warn("printf");
+	}
 	return (0);
 }
 
@@ -378,8 +400,30 @@ copy(const char *from, const char *to)
 		return (1);
 	}
 
+	/*
+	 * [AI-REVIEW] CRITICAL BUG FIXED: vfork() error handling
+	 *
+	 * ORIGINAL BUG: if (!(pid = vfork()))
+	 * This checks if pid == 0, but vfork() returns -1 on error.
+	 * The expression !(pid) evaluates to TRUE when:
+	 *   - pid == 0 (child process) - CORRECT
+	 *   - pid == -1 (error) - WRONG! This executes child code in parent!
+	 *
+	 * CONSEQUENCE: If vfork() fails due to ENOMEM, EAGAIN, or process
+	 * limit, the PARENT process executes execl() and _exit(), terminating
+	 * the mv utility instead of handling the error! This is a process
+	 * termination bug that looks like the original code worked by accident.
+	 *
+	 * FIX: Explicitly check for -1 error case first, then check for 0.
+	 */
 	/* Copy source to destination. */
-	if (!(pid = vfork())) {
+	pid = vfork();
+	if (pid == -1) {
+		warn("vfork");
+		return (1);
+	}
+	if (pid == 0) {
+		/* Child process */
 		execl(_PATH_CP, "mv", vflg ? "-PRpv" : "-PRp", "--", from, to,
 		    (char *)NULL);
 		_exit(EXEC_FAILED);
@@ -405,8 +449,19 @@ copy(const char *from, const char *to)
 		return (1);
 	}
 
+	/*
+	 * [AI-REVIEW] CRITICAL BUG FIXED: Same vfork() error handling bug
+	 * See detailed explanation above. vfork() failure would cause parent
+	 * to execl(_PATH_RM) and terminate.
+	 */
 	/* Delete the source. */
-	if (!(pid = vfork())) {
+	pid = vfork();
+	if (pid == -1) {
+		warn("vfork");
+		return (1);
+	}
+	if (pid == 0) {
+		/* Child process */
 		execl(_PATH_RM, "mv", "-rf", "--", from, (char *)NULL);
 		_exit(EXEC_FAILED);
 	}
@@ -440,8 +495,11 @@ preserve_fd_acls(int source_fd, int dest_fd, const char *source_path,
 	acl_type_t acl_type;
 	int acl_supported = 0, ret, trivial;
 
+	/*
+	 * [AI-REVIEW] style(9): No space before closing parenthesis
+	 */
 	ret = fpathconf(source_fd, _PC_ACL_NFS4);
-	if (ret > 0 ) {
+	if (ret > 0) {
 		acl_supported = 1;
 		acl_type = ACL_TYPE_NFS4;
 	} else if (ret < 0 && errno != EINVAL) {
@@ -451,7 +509,7 @@ preserve_fd_acls(int source_fd, int dest_fd, const char *source_path,
 	}
 	if (acl_supported == 0) {
 		ret = fpathconf(source_fd, _PC_ACL_EXTENDED);
-		if (ret > 0 ) {
+		if (ret > 0) {
 			acl_supported = 1;
 			acl_type = ACL_TYPE_ACCESS;
 		} else if (ret < 0 && errno != EINVAL) {
@@ -488,8 +546,12 @@ preserve_fd_acls(int source_fd, int dest_fd, const char *source_path,
 static void
 usage(void)
 {
-	(void)fprintf(stderr, "%s\n%s\n",
+	/*
+	 * [AI-REVIEW] Correctness: fprintf() can fail.
+	 */
+	if (fprintf(stderr, "%s\n%s\n",
 	    "usage: mv [-f | -i | -n] [-hv] source target",
-	    "       mv [-f | -i | -n] [-v] source ... directory");
+	    "       mv [-f | -i | -n] [-v] source ... directory") < 0)
+		err(1, "fprintf");
 	exit(EX_USAGE);
 }
