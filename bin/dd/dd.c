@@ -33,6 +33,10 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/capsicum.h>
@@ -95,9 +99,16 @@ main(int argc __unused, char *argv[])
 	if (caph_enter() < 0)
 		err(1, "unable to enter capability mode");
 
-	(void)signal(SIGINFO, siginfo_handler);
+	/*
+	 * [AI-REVIEW] Correctness: signal() can fail and return SIG_ERR.
+	 * For SIGINFO (progress reporting) and SIGALRM (progress timer),
+	 * failure is non-fatal but should be checked.
+	 */
+	if (signal(SIGINFO, siginfo_handler) == SIG_ERR)
+		warn("signal(SIGINFO)");
 	if (ddflags & C_PROGRESS) {
-		(void)signal(SIGALRM, sigalarm_handler);
+		if (signal(SIGALRM, sigalarm_handler) == SIG_ERR)
+			warn("signal(SIGALRM)");
 		setitimer(ITIMER_REAL, &itv, NULL);
 	}
 
@@ -317,6 +328,9 @@ getfdtype(IO *io)
 		err(1, "%s", io->name);
 	if (S_ISREG(sb.st_mode))
 		io->flags |= ISTRUNC;
+	/*
+	 * [AI-REVIEW] style(9): space after macro name
+	 */
 	if (S_ISCHR(sb.st_mode) || S_ISBLK(sb.st_mode)) { 
 		if (ioctl(io->fd, FIODTYPE, &type) == -1) {
 			err(1, "%s", io->name);
