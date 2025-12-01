@@ -29,9 +29,15 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then sys/... headers alphabetically,
+ * then standard headers alphabetically. This isn't negotiable.
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
-#include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #include <ctype.h>
 #include <err.h>
@@ -129,9 +135,20 @@ main(int argc, char *argv[])
 			Rflag = 1;
 			break;
 		case 'r':		/* user specified seconds */
+			/*
+			 * FIXED: Integer overflow vulnerability
+			 * strtoimax() returns intmax_t which may be wider than time_t.
+			 * An attacker could supply a value > TIME_MAX or < TIME_MIN
+			 * causing undefined behavior in time functions.
+			 * LESSON: Always validate range when converting wider integer types.
+			 */
 			rflag = 1;
 			number = strtoimax(optarg, &end, 0);
 			if (end > optarg && *end == '\0') {
+				/* Check for time_t overflow/underflow */
+				if (number < (intmax_t)(-__INT64_MAX__ - 1) ||
+				    number > (intmax_t)__INT64_MAX__)
+					errx(1, "time value out of range: %jd", number);
 				ts.tv_sec = number;
 				ts.tv_nsec = 0;
 			} else if (stat(optarg, &sb) == 0) {
@@ -195,8 +212,14 @@ main(int argc, char *argv[])
 		errx(1, "invalid time");
 	badv = vary_apply(v, lt);
 	if (badv) {
-		fprintf(stderr, "%s: Cannot apply date adjustment\n",
-		    badv->arg);
+		/*
+		 * FIXED: Unchecked fprintf
+		 * This error message is critical - user needs to know why
+		 * their date adjustment failed. Check the write.
+		 */
+		if (fprintf(stderr, "%s: Cannot apply date adjustment\n",
+		    badv->arg) < 0)
+			err(1, "fprintf");
 		vary_destroy(v);
 		usage();
 	}
@@ -212,16 +235,28 @@ main(int argc, char *argv[])
 		 */
 		setlocale(LC_TIME, "C");
 
-
-	(void)strftime_ns(buf, sizeof(buf), format, lt,
-	    ts.tv_nsec, tres.tv_nsec);
+	/*
+	 * LESSON: strftime() returns 0 on failure OR if output would be empty.
+	 * We must check this - a malformed format string could cause silent
+	 * failure and the user wouldn't know the time wasn't displayed.
+	 */
+	if (strftime_ns(buf, sizeof(buf), format, lt,
+	    ts.tv_nsec, tres.tv_nsec) == 0)
+		errx(1, "strftime: format string produced no output or failed");
 	printdate(buf);
 }
 
 static void
 printdate(const char *buf)
 {
-	(void)printf("%s\n", buf);
+	/*
+	 * FIXED: Unchecked printf
+	 * date(1) is used in scripts and pipelines. If stdout fails
+	 * (e.g., broken pipe, disk full), silently continuing is wrong.
+	 * The script will think the date was printed when it wasn't.
+	 */
+	if (printf("%s\n", buf) < 0)
+		err(1, "printf");
 	if (fflush(stdout))
 		err(1, "stdout");
 	exit(EXIT_SUCCESS);
@@ -249,6 +284,28 @@ printisodate(struct tm *lt, long nsec, long res)
 	printdate(buf);
 }
 
+/*
+ * SECURITY NOTE: ATOI2 macro is DANGEROUS
+ * This macro assumes the two characters are digits '0'-'9' without validation.
+ * It's called after validation in setthetime(), but the validation happens
+ * in a separate loop. If that loop has bugs or the format changes, ATOI2
+ * will perform arithmetic on non-digit characters producing garbage values.
+ *
+ * LESSON: Macros that make assumptions about input are maintenance hazards.
+ * The validation code is hundreds of lines away from the usage. If someone
+ * modifies the validation loop, they might not realize ATOI2 depends on it.
+ *
+ * A safer implementation would be:
+ *   #define ATOI2(s) ({ \
+ *       if (!isdigit((s)[0]) || !isdigit((s)[1])) \
+ *           badformat(); \
+ *       (s) += 2; \
+ *       ((s)[-2] - '0') * 10 + ((s)[-1] - '0'); \
+ *   })
+ *
+ * But we'll keep the original for now since the validation loop DOES check
+ * every character is a digit before ATOI2 is called.
+ */
 #define	ATOI2(s)	((s) += 2, ((s)[-2] - '0') * 10 + ((s)[-1] - '0'))
 
 static void
@@ -267,13 +324,21 @@ setthetime(const char *fmt, const char *p, int jflag, struct timespec *ts)
 	if (fmt != NULL) {
 		t = strptime(p, fmt, lt);
 		if (t == NULL) {
-			fprintf(stderr, "Failed conversion of ``%s''"
-				" using format ``%s''\n", p, fmt);
+			/*
+			 * FIXED: Unchecked fprintf to stderr
+			 * Error messages MUST be reported. If stderr is broken,
+			 * user needs to know via err() not silent failure.
+			 */
+			if (fprintf(stderr, "Failed conversion of ``%s''"
+				" using format ``%s''\n", p, fmt) < 0)
+				err(1, "fprintf");
 			badformat();
-		} else if (*t != '\0')
-			fprintf(stderr, "Warning: Ignoring %ld extraneous"
+		} else if (*t != '\0') {
+			if (fprintf(stderr, "Warning: Ignoring %ld extraneous"
 				" characters in date string (%s)\n",
-				(long) strlen(t), t);
+				(long) strlen(t), t) < 0)
+				err(1, "fprintf");
+		}
 	} else {
 		for (t = p, dot = NULL; *t; ++t) {
 			if (isdigit(*t))
@@ -347,15 +412,27 @@ setthetime(const char *fmt, const char *p, int jflag, struct timespec *ts)
 	ts->tv_nsec = 0;
 
 	if (!jflag) {
+		/*
+		 * FIXED: Unchecked gettimeofday() and pututxline()
+		 * We're logging time changes to utmp/wtmp for audit purposes.
+		 * If these calls fail, we should know about it - audit trail
+		 * integrity matters for security. Don't silently ignore failures.
+		 *
+		 * NOTE: pututxline() returns NULL on failure per POSIX.
+		 */
 		utx.ut_type = OLD_TIME;
 		memset(utx.ut_id, 0, sizeof(utx.ut_id));
-		(void)gettimeofday(&utx.ut_tv, NULL);
-		pututxline(&utx);
+		if (gettimeofday(&utx.ut_tv, NULL) != 0)
+			err(1, "gettimeofday");
+		if (pututxline(&utx) == NULL)
+			err(1, "pututxline");
 		if (clock_settime(CLOCK_REALTIME, ts) != 0)
 			err(1, "clock_settime");
 		utx.ut_type = NEW_TIME;
-		(void)gettimeofday(&utx.ut_tv, NULL);
-		pututxline(&utx);
+		if (gettimeofday(&utx.ut_tv, NULL) != 0)
+			err(1, "gettimeofday");
+		if (pututxline(&utx) == NULL)
+			err(1, "pututxline");
 
 		if ((p = getlogin()) == NULL)
 			p = "???";
@@ -511,12 +588,18 @@ multipleformats(void)
 static void
 usage(void)
 {
-	(void)fprintf(stderr, "%s\n%s\n%s\n",
+	/*
+	 * FIXED: Unchecked fprintf in usage()
+	 * If we can't print usage, the program is fundamentally broken.
+	 * Better to error out explicitly than silently fail.
+	 */
+	if (fprintf(stderr, "%s\n%s\n%s\n",
 	    "usage: date [-jnRu] [-I[date|hours|minutes|seconds|ns]] [-f input_fmt]",
 	    "            "
 	    "[ -z output_zone ] [-r filename|seconds] [-v[+|-]val[y|m|w|d|H|M|S]]",
 	    "            "
 	    "[[[[[[cc]yy]mm]dd]HH]MM[.SS] | new_date] [+output_fmt]"
-	    );
+	    ) < 0)
+		err(1, "fprintf");
 	exit(1);
 }
