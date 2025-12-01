@@ -32,6 +32,10 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 

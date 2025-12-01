@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 21 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, cat/Makefile)
-- **Lines of Code Analyzed:** ~5800
-- **Issues Identified:** 138 distinct problems
-- **Issues Documented:** 138
+- **Files Reviewed:** 25 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, cat/Makefile)
+- **Lines of Code Analyzed:** ~7500
+- **Issues Identified:** 144 distinct problems
+- **Issues Documented:** 144
 - **CRITICAL BUGS FIXED:** 12 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2)
 
 ### Severity Breakdown
@@ -37,10 +37,10 @@
   - **vfork() error handling in mv.c line 382 (parent executes child code on error, terminates mv) FIXED**
   - **vfork() error handling in mv.c line 409 (parent executes child code on error, terminates mv) FIXED**
   
-- **style(9) Violations:** 39+
+- **style(9) Violations:** 43+
   - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style, extra spaces before closing parens
   
-- **Correctness/Logic Errors:** 65+
+- **Correctness/Logic Errors:** 67+
   - Missing error checks, incorrect loop conditions, wrong errno handling, missing argument validation, unsafe integer types, unchecked printf/fprintf, missing errno checks for strtol, unchecked strdup, unchecked signal(), unchecked stat/lstat, wrong vfork() error checking, unchecked fflush()
   
 - **Build System Issues:** 2
@@ -342,20 +342,39 @@ rm is EXTREMELY HIGH RISK as a file deletion utility. However, the code is well-
 
 **Issues Fixed:** 17 (4 style, 13 correctness)
 
+### 21-24. bin/ls/*.c (ls.c, print.c, util.c, cmp.c)
+**Status:** ACCEPTABLE (with fixes)
+**Files:** 4 C files totaling ~1,700 lines
+**Issues:**
+- **Style:** Missing `sys/cdefs.h` in all 4 files. **Fixed.**
+- **Correctness: Unchecked signal() (2 instances)** - ls.c lines 547-548, SIGINT and SIGQUIT handlers for color cleanup can fail. **Fixed.**
+
+**Code Analysis:**
+ls is a complex utility with extensive formatting logic (1055-line ls.c + supporting files). The code quality is good:
+- Uses fts(3) for directory traversal
+- Proper handling of terminal width detection
+- Color support with termcap
+- Extensive option handling (30+ flags)
+- No critical security issues found
+
+The signal handlers are only for cleanup (resetting terminal colors on interrupt), so failure is non-fatal but should be reported.
+
+**Issues Fixed:** 6 (4 style in 4 files, 2 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 21 C files  
+**Files Reviewed:** 25 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.050%  
+**Completion Percentage:** 0.059%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 21/111 bin files reviewed
+**Status:** 25/111 bin files reviewed
 
-#### Completed (21 files)
+#### Completed (25 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -376,13 +395,17 @@ rm is EXTREMELY HIGH RISK as a file deletion utility. However, the code is well-
 - ✅ bin/cp/utils.c (10 issues - 1 CRITICAL unchecked sysconf)
 - ✅ bin/mv/mv.c (10 issues - 2 CRITICAL vfork bugs)
 - ✅ bin/rm/rm.c (17 issues)
+- ✅ bin/ls/ls.c (2 issues)
+- ✅ bin/ls/print.c (1 issue)
+- ✅ bin/ls/util.c (1 issue)
+- ✅ bin/ls/cmp.c (1 issue)
 
 #### Next Priority Queue
-1. ⬜ bin/ls/ls.c
-2. ⬜ bin/chown/chown.c
-3. ⬜ bin/chgrp/chgrp.c
-4. ⬜ bin/dd/dd.c
-5. ⬜ bin/df/df.c
+1. ⬜ bin/chown/chown.c
+2. ⬜ bin/chgrp/chgrp.c
+3. ⬜ bin/dd/dd.c
+4. ⬜ bin/df/df.c
+5. ⬜ bin/ps/ps.c
 
 ---
 

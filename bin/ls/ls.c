@@ -32,6 +32,10 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -540,8 +544,15 @@ main(int argc, char *argv[])
 		 * for "stty oxtabs" mode.
 		 */
 		f_notabs = 1;
-		(void)signal(SIGINT, colorquit);
-		(void)signal(SIGQUIT, colorquit);
+		/*
+		 * [AI-REVIEW] Correctness: signal() can fail and return SIG_ERR.
+		 * For color mode cleanup on signals, we should check for errors.
+		 * If signal() fails, we continue without signal handlers.
+		 */
+		if (signal(SIGINT, colorquit) == SIG_ERR)
+			warn("signal(SIGINT)");
+		if (signal(SIGQUIT, colorquit) == SIG_ERR)
+			warn("signal(SIGQUIT)");
 		parsecolors(getenv("LSCOLORS"));
 	}
 #endif
