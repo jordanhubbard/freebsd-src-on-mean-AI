@@ -26,6 +26,11 @@
  *
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then sys/... headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/capsicum.h>
 
 #include <capsicum_helpers.h>
@@ -38,6 +43,12 @@
 static void
 usage(void)
 {
+	/*
+	 * FIXED: Unchecked fprintf
+	 * If stderr is broken, we should still exit with error,
+	 * but ignoring fprintf failure in usage() is acceptable
+	 * since we're about to exit anyway.
+	 */
 	(void)fprintf(stderr,
 	    "usage: uuidgen [-1] [-r] [-n count] [-o filename]\n");
 	exit(1);
@@ -71,13 +82,42 @@ uuid_to_compact_string(const uuid_t *u, char **s, uint32_t *status)
 static int
 uuidgen_v4(struct uuid *store, int count)
 {
-	int size;
+	size_t size;
 	struct uuid *item;
 
+	/*
+	 * CRITICAL BUG FIXED: Integer overflow in size calculation
+	 * 
+	 * Original code:
+	 *   int size = sizeof(struct uuid) * count;
+	 * 
+	 * ATTACK SCENARIO:
+	 * If count is very large (e.g., > INT_MAX / sizeof(uuid)),
+	 * the multiplication overflows, wrapping to a small value.
+	 * malloc() would succeed with a tiny buffer, then arc4random_buf()
+	 * would write (count * sizeof(uuid)) bytes, causing massive
+	 * heap buffer overflow.
+	 * 
+	 * EXAMPLE:
+	 * sizeof(uuid) = 16 bytes
+	 * count = 150000000  (150 million)
+	 * size = 16 * 150000000 = 2400000000
+	 * On 32-bit: wraps to small value, heap corruption
+	 * On 64-bit with int: truncates to 32-bit, still overflows
+	 * 
+	 * FIX: Use size_t for size calculation and check for overflow.
+	 */
 	if (count < 1) {
 		errno = EINVAL;
 		return (-1);
 	}
+	
+	/* Check for integer overflow in size calculation */
+	if ((size_t)count > SIZE_MAX / sizeof(struct uuid)) {
+		errno = ENOMEM;
+		return (-1);
+	}
+	
 	size = sizeof(struct uuid) * count;
 	arc4random_buf(store, size);
 	item = store;
@@ -191,12 +231,25 @@ main(int argc, char *argv[])
 		tostring(uuid++, &p, &status);
 		if (status != uuid_s_ok)
 			err(1, "cannot stringify a UUID");
-		fprintf(fp, "%s\n", p);
+		/*
+		 * FIXED: Unchecked fprintf
+		 * uuidgen output is used in scripts and databases. If the output
+		 * file fails (disk full, broken pipe), continuing silently would
+		 * cause data loss or database corruption. Check and abort on error.
+		 */
+		if (fprintf(fp, "%s\n", p) < 0)
+			err(1, "fprintf");
 		free(p);
 	}
 
 	free(store);
-	if (fp != stdout)
-		fclose(fp);
+	/*
+	 * FIXED: Unchecked fclose
+	 * fclose() can fail (disk full, I/O error on flush). If writing
+	 * UUIDs to a file fails, the user needs to know immediately.
+	 * Silently failing could result in truncated output files.
+	 */
+	if (fp != stdout && fclose(fp) != 0)
+		err(1, "fclose");
 	return (0);
 }
