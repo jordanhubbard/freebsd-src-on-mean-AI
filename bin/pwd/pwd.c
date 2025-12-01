@@ -30,7 +30,7 @@
  */
 
 /*
- * INCLUDE ORDERING: Per style(9), sys/* headers first alphabetically,
+ * INCLUDE ORDERING: Per style(9), sys/... headers first alphabetically,
  * then blank line, then userland headers alphabetically.
  */
 #include <sys/param.h>

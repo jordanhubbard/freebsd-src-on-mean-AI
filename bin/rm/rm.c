@@ -30,7 +30,7 @@
  */
 
 /*
- * [AI-REVIEW] style(9): sys/cdefs.h must be first include, then sys/* in correct order
+ * [AI-REVIEW] style(9): sys/cdefs.h must be first include, then sys/... in correct order
  */
 #include <sys/cdefs.h>
 #include <sys/param.h>
