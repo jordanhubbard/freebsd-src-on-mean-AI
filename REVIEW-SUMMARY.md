@@ -11,11 +11,11 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 29 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date)
-- **Lines of Code Analyzed:** ~10900
-- **Issues Identified:** 158 distinct problems
-- **Issues Documented:** 158
-- **CRITICAL BUGS FIXED:** 13 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow)
+- **Files Reviewed:** 30 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test)
+- **Lines of Code Analyzed:** ~11550
+- **Issues Identified:** 162 distinct problems
+- **Issues Documented:** 162
+- **CRITICAL BUGS FIXED:** 14 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation)
 
 ### Severity Breakdown
 
@@ -440,20 +440,51 @@ date is a PRIVILEGED utility (~500 lines) that sets the system clock:
 
 **Issues Fixed:** 8 (1 CRITICAL security, 1 style, 6 correctness)
 
+### 29. bin/test/test.c
+**Status:** HAD CRITICAL SECURITY BUG - FIXED
+**Issues:**
+- **CRITICAL: Integer truncation in getn()** strtol() returns long (64-bit), cast to int (32-bit) without overflow check. **Fixed.**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Style:** sys/... headers not alphabetically ordered. **Fixed.**
+- **Documentation:** Added extensive TOCTOU security warnings. **Added.**
+
+**Code Analysis:**
+test is the shell test utility (~650 lines) used in EVERY shell script:
+- Evaluates conditional expressions for shell scripts
+- File tests: -r, -w, -x, -f, -d, -e, -L, -S, etc.
+- String comparisons: =, !=, <, >
+- Integer comparisons: -eq, -ne, -lt, -le, -gt, -ge
+- Boolean operators: -a (AND), -o (OR), ! (NOT)
+- Implements shell's [ and test built-in
+
+**CRITICAL BUG:** The getn() function parses integer operands for -eq, -ne, -gt, etc. using strtol() which returns `long` (64-bit on amd64), then casts to `int` (32-bit) without checking for overflow. Attack example: `[ 4294967297 -eq 1 ]` would return TRUE because 0x100000001 truncates to 1! Scripts checking UIDs, file descriptors, or numeric ranges could be completely broken by this truncation.
+
+**TOCTOU DOCUMENTATION:** Added 100+ lines of security warnings documenting that test(1) is fundamentally racy:
+- All file tests (-r, -w, -x, -f, etc.) are check-then-act patterns
+- Files can be replaced between test and subsequent shell operations
+- Attack scenarios documented: permission bypasses, file type confusion, SUID replacement
+- Clarified that test(1) CANNOT fix these races - they're inherent to shell scripting
+- Emphasized test(1) is for convenience, NOT security decisions
+- Provided defense guidance: use C programs with O_NOFOLLOW + fstat() for security-critical checks
+
+The TOCTOU issues are unfixable by design - shell scripts are inherently racy. But developers must understand these limitations when writing security-critical scripts.
+
+**Issues Fixed:** 4 (1 CRITICAL security, 2 style, 1 major documentation)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 29 C files  
+**Files Reviewed:** 30 C files  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.069%  
+**Completion Percentage:** 0.071%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 29/111 bin files reviewed
+**Status:** 30/111 bin files reviewed
 
-#### Completed (29 files)
+#### Completed (30 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -482,9 +513,10 @@ date is a PRIVILEGED utility (~500 lines) that sets the system clock:
 - ✅ bin/df/df.c (1 issue)
 - ✅ bin/ps/ps.c (1 issue)
 - ✅ bin/date/date.c (8 issues - 1 CRITICAL integer overflow)
+- ✅ bin/test/test.c (4 issues - 1 CRITICAL integer truncation + extensive TOCTOU documentation)
 
 #### Next Priority Queue
-1. ⬜ bin/test/test.c
+1. ⬜ bin/expr/expr.y
 2. ⬜ bin/expr/expr.y
 3. ⬜ bin/ed/main.c
 4. ⬜ bin/pax/pax.c
