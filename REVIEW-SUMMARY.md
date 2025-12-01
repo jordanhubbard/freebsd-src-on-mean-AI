@@ -11,11 +11,11 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 32 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h)
-- **Lines of Code Analyzed:** ~15200
-- **Issues Identified:** 167 distinct problems
-- **Issues Documented:** 167
-- **CRITICAL BUGS FIXED:** 14 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation)
+- **Files Reviewed:** 33 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen)
+- **Lines of Code Analyzed:** ~15400
+- **Issues Identified:** 171 distinct problems
+- **Issues Documented:** 171
+- **CRITICAL BUGS FIXED:** 15 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
 
 ### Severity Breakdown
 
@@ -545,21 +545,57 @@ Only obvious style violations were fixed. ed(1) requires dedicated deep audit du
 
 **Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
 
+### 32. bin/uuidgen/uuidgen.c
+**Status:** HAD CRITICAL SECURITY BUG - FIXED
+**Issues:**
+- **CRITICAL: Heap buffer overflow in uuidgen_v4()** Integer overflow in size calculation. **Fixed.**
+- **Unchecked fprintf()** in main output loop. **Fixed.**
+- **Unchecked fclose()** when writing to file. **Fixed.**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+
+**Code Analysis:**
+uuidgen is a simple UUID generation utility (~200 lines):
+- Generates UUIDs version 1 (time-based) via uuidgen()
+- Generates UUIDs version 4 (random) via uuidgen_v4()
+- Uses arc4random_buf() for cryptographic randomness
+- Supports Capsicum sandboxing
+- Outputs in standard or compact format
+
+**CRITICAL BUG:** Integer overflow in size calculation for UUID buffer:
+```c
+int size = sizeof(struct uuid) * count;  // WRONG!
+```
+If count is large (e.g., 150 million), the multiplication overflows. With `sizeof(uuid) = 16`, we get `16 * 150000000 = 2400000000`, which overflows 32-bit int, wrapping to a small value. malloc() succeeds with tiny buffer, then arc4random_buf() writes the full size, causing MASSIVE heap buffer overflow.
+
+ATTACK: `uuidgen -r -n 150000000` would corrupt heap memory.
+
+FIX: Changed `size` to `size_t` and added explicit overflow check:
+```c
+if ((size_t)count > SIZE_MAX / sizeof(struct uuid)) {
+    errno = ENOMEM;
+    return (-1);
+}
+```
+
+**I/O ERROR CHECKING:** UUIDs are used in databases and scripts. If fprintf() or fclose() fail (disk full), silent failure would cause data loss or database corruption. Added explicit error checking for both operations.
+
+**Issues Fixed:** 4 (1 CRITICAL security, 1 style, 2 correctness)
+
 ---
 
 ## PROGRESS TRACKING AND TODO
 
 ### Overall Progress
 
-**Files Reviewed:** 32 C files (1 partial)  
+**Files Reviewed:** 33 C files (1 partial)  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.076%  
+**Completion Percentage:** 0.078%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 32/111 bin files reviewed  
+**Status:** 33/111 bin files reviewed  
 *Note: ed is partially audited - needs deep review*
 
-#### Completed (32 files)
+#### Completed (33 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -591,9 +627,10 @@ Only obvious style violations were fixed. ed(1) requires dedicated deep audit du
 - ✅ bin/test/test.c (4 issues - 1 CRITICAL integer truncation + extensive TOCTOU documentation)
 - ✅ bin/expr/expr.y (3 issues + ReDoS documentation, arithmetic overflow handling excellent)
 - ⚠️ bin/ed/*.c (2 style issues - PARTIAL AUDIT ONLY, needs deep review)
+- ✅ bin/uuidgen/uuidgen.c (4 issues - 1 CRITICAL heap overflow)
 
 #### Next Priority Queue
-1. ⬜ bin/pax/pax.c
+1. ⬜ bin/chflags/chflags.c
 2. ⬜ bin/expr/expr.y
 3. ⬜ bin/ed/main.c
 4. ⬜ bin/pax/pax.c
