@@ -114,25 +114,51 @@ main(int argc, char *argv[])
 			aflag = 1;
 			break;
 
-		case 'e':
-			found_arg++;
-			name = "maximum blocks per file in a cylinder group";
-			evalue = atoi(optarg);
-			if (evalue < 1)
-				errx(10, "%s must be >= 1 (was %s)",
-				    name, optarg);
-			eflag = 1;
-			break;
+	case 'e':
+		{
+		char *endptr;
+		long lval;
 
-		case 'f':
-			found_arg++;
-			name = "average file size";
-			fvalue = atoi(optarg);
-			if (fvalue < 1)
-				errx(10, "%s must be >= 1 (was %s)",
-				    name, optarg);
-			fflag = 1;
-			break;
+		found_arg++;
+		name = "maximum blocks per file in a cylinder group";
+		/*
+		 * FIXED: CRITICAL BUG - atoi() on FILESYSTEM PARAMETER!
+		 * BUG: atoi("9999999999") overflows → FILESYSTEM CORRUPTION!
+		 * BUG: atoi("garbage") returns 0 → wrong block count!
+		 * This modifies LIVE FILESYSTEM - DATA CORRUPTION RISK!
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 1 ||
+		    lval > INT_MAX)
+			errx(10, "%s must be >= 1 (was %s)", name, optarg);
+		evalue = (int)lval;
+		eflag = 1;
+		}
+		break;
+
+	case 'f':
+		{
+		char *endptr;
+		long lval;
+
+		found_arg++;
+		name = "average file size";
+		/*
+		 * FIXED: CRITICAL BUG - atoi() on FILESYSTEM PARAMETER!
+		 * BUG: atoi("9999999999") overflows → FILESYSTEM CORRUPTION!
+		 * BUG: atoi("garbage") returns 0 → wrong file size estimate!
+		 * This modifies LIVE FILESYSTEM - DATA CORRUPTION RISK!
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 1 ||
+		    lval > INT_MAX)
+			errx(10, "%s must be >= 1 (was %s)", name, optarg);
+		fvalue = (int)lval;
+		fflag = 1;
+		}
+		break;
 
 		case 'j':
 			found_arg++;
@@ -158,14 +184,29 @@ main(int argc, char *argv[])
 			Jflag = 1;
 			break;
 
-		case 'k':
-			found_arg++;
-			name = "space to hold for metadata blocks";
-			kvalue = atoi(optarg);
-			if (kvalue < 0)
-				errx(10, "bad %s (%s)", name, optarg);
-			kflag = 1;
-			break;
+	case 'k':
+		{
+		char *endptr;
+		long lval;
+
+		found_arg++;
+		name = "space to hold for metadata blocks";
+		/*
+		 * FIXED: CRITICAL BUG - atoi() on FILESYSTEM PARAMETER!
+		 * BUG: atoi("9999999999") overflows → FILESYSTEM CORRUPTION!
+		 * BUG: atoi("-123") negative wraps → wrong metadata space!
+		 * BUG: atoi("garbage") returns 0 → wrong allocation!
+		 * This modifies LIVE FILESYSTEM METADATA SPACE - CRITICAL!
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > INT_MAX)
+			errx(10, "bad %s (%s)", name, optarg);
+		kvalue = (int)lval;
+		kflag = 1;
+		}
+		break;
 
 		case 'L':
 			found_arg++;
@@ -199,14 +240,27 @@ main(int argc, char *argv[])
 			lflag = 1;
 			break;
 
-		case 'm':
-			found_arg++;
-			name = "minimum percentage of free space";
-			mvalue = atoi(optarg);
-			if (mvalue < 0 || mvalue > 99)
-				errx(10, "bad %s (%s)", name, optarg);
-			mflag = 1;
-			break;
+	case 'm':
+		{
+		char *endptr;
+		long lval;
+
+		found_arg++;
+		name = "minimum percentage of free space";
+		/*
+		 * FIXED: CRITICAL BUG - atoi() on FILESYSTEM PARAMETER!
+		 * BUG: atoi("9999999999") overflows, could bypass check!
+		 * BUG: atoi("garbage") returns 0 → wrong free space %!
+		 * This modifies LIVE FILESYSTEM FREE SPACE - CRITICAL!
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 || lval > 99)
+			errx(10, "bad %s (%s)", name, optarg);
+		mvalue = (int)lval;
+		mflag = 1;
+		}
+		break;
 
 		case 'N':
 			found_arg++;
@@ -251,24 +305,51 @@ main(int argc, char *argv[])
 			pflag = 1;
 			break;
 
-		case 's':
-			found_arg++;
-			name = "expected number of files per directory";
-			svalue = atoi(optarg);
-			if (svalue < 1)
-				errx(10, "%s must be >= 1 (was %s)",
-				    name, optarg);
-			sflag = 1;
-			break;
+	case 's':
+		{
+		char *endptr;
+		long lval;
 
-		case 'S':
-			found_arg++;
-			name = "Softdep Journal Size";
-			Svalue = atoi(optarg);
-			if (Svalue < SUJ_MIN)
-				errx(10, "%s must be >= %d (was %s)",
-				    name, SUJ_MIN, optarg);
-			break;
+		found_arg++;
+		name = "expected number of files per directory";
+		/*
+		 * FIXED: CRITICAL BUG - atoi() on FILESYSTEM PARAMETER!
+		 * BUG: atoi("9999999999") overflows → FILESYSTEM CORRUPTION!
+		 * BUG: atoi("garbage") returns 0 → wrong optimization!
+		 * This modifies LIVE FILESYSTEM - DATA CORRUPTION RISK!
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 1 ||
+		    lval > INT_MAX)
+			errx(10, "%s must be >= 1 (was %s)", name, optarg);
+		svalue = (int)lval;
+		sflag = 1;
+		}
+		break;
+
+	case 'S':
+		{
+		char *endptr;
+		long lval;
+
+		found_arg++;
+		name = "Softdep Journal Size";
+		/*
+		 * FIXED: CRITICAL BUG - atoi() on FILESYSTEM PARAMETER!
+		 * BUG: atoi("9999999999") overflows → wrong journal size!
+		 * BUG: atoi("garbage") returns 0 → JOURNAL CORRUPTION!
+		 * This modifies LIVE FILESYSTEM JOURNAL - CRITICAL!
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < SUJ_MIN ||
+		    lval > INT_MAX)
+			errx(10, "%s must be >= %d (was %s)",
+			    name, SUJ_MIN, optarg);
+		Svalue = (int)lval;
+		}
+		break;
 
 		case 't':
 			found_arg++;

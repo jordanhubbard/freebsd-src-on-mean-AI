@@ -156,11 +156,25 @@ main(int argc, char *argv[])
 		case 'N':
 			Nflag = 1;
 			break;
-		case 'O':
-			if ((Oflag = atoi(optarg)) < 1 || Oflag > 2)
-				errx(1, "%s: bad file system format value",
-				    optarg);
-			break;
+	case 'O':
+		{
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO overflow checking!
+		 * BUG: atoi("9999999999") overflows, could bypass check!
+		 * BUG: atoi("garbage") returns 0 → wrong FS format!
+		 * This controls FILESYSTEM FORMAT VERSION - DATA CORRUPTION RISK!
+		 * Use strtol() for proper validation before bounds check.
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 1 || lval > 2)
+			errx(1, "%s: bad file system format value", optarg);
+		Oflag = (int)lval;
+		}
+		break;
 		case 'R':
 			Rflag = 1;
 			break;
@@ -240,17 +254,48 @@ main(int argc, char *argv[])
 		case 'l':
 			lflag = 1;
 			break;
-		case 'k':
-			if ((metaspace = atoi(optarg)) < 0)
-				errx(1, "%s: bad metadata space %%", optarg);
-			if (metaspace == 0)
-				/* force to stay zero in mkfs */
-				metaspace = -1;
-			break;
-		case 'm':
-			if ((minfree = atoi(optarg)) < 0 || minfree > 99)
-				errx(1, "%s: bad free space %%", optarg);
-			break;
+	case 'k':
+		{
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO overflow checking!
+		 * BUG: atoi("9999999999") overflows → wrong metadata allocation!
+		 * BUG: atoi("garbage") returns 0 → wrong space calculation!
+		 * This controls FILESYSTEM METADATA SPACE - DATA CORRUPTION RISK!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > INT_MAX)
+			errx(1, "%s: bad metadata space %%", optarg);
+		metaspace = (int)lval;
+		if (metaspace == 0)
+			/* force to stay zero in mkfs */
+			metaspace = -1;
+		}
+		break;
+	case 'm':
+		{
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO overflow checking!
+		 * BUG: atoi("9999999999") overflows, could bypass check!
+		 * BUG: atoi("garbage") returns 0 → wrong free space!
+		 * This controls FILESYSTEM MINIMUM FREE SPACE - DATA CORRUPTION RISK!
+		 * Use strtol() for proper validation before bounds check.
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 || lval > 99)
+			errx(1, "%s: bad free space %%", optarg);
+		minfree = (int)lval;
+		}
+		break;
 		case 'n':
 			nflag = 1;
 			break;

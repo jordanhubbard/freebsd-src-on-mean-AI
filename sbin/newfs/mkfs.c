@@ -1193,8 +1193,22 @@ charsperline(void)
 	columns = 0;
 	if (ioctl(0, TIOCGWINSZ, &ws) != -1)
 		columns = ws.ws_col;
-	if (columns == 0 && (cp = getenv("COLUMNS")))
-		columns = atoi(cp);
+	if (columns == 0 && (cp = getenv("COLUMNS"))) {
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: atoi() on environment variable - ZERO validation!
+		 * BUG: atoi("garbage") returns 0, not detected as error
+		 * BUG: atoi("9999999999") overflows
+		 * Low severity (display only) but should validate untrusted env var.
+		 */
+		errno = 0;
+		lval = strtol(cp, &endptr, 10);
+		if (errno == 0 && *endptr == '\0' && lval > 0 &&
+		    lval <= INT_MAX)
+			columns = (int)lval;
+	}
 	if (columns == 0)
 		columns = 80;	/* last resort */
 	return (columns);
