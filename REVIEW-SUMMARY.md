@@ -11,10 +11,10 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 40 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl, cpuset, timeout, setfacl)
-- **Lines of Code Analyzed:** ~17704 (added ~1014 lines)
-- **Issues Identified:** 215 distinct problems (added 14)
-- **Issues Documented:** 215
+- **Files Reviewed:** 42 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl, cpuset, timeout, setfacl, chio, pkill)
+- **Lines of Code Analyzed:** ~19817 (added ~2113 lines: chio 1239 + pkill 874)
+- **Issues Identified:** 219 distinct problems (added 4 style issues)
+- **Issues Documented:** 219
 - **CRITICAL BUGS FIXED:** 20 (includes 5 atoi() vulnerabilities in cpuset) (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
 
 ### Severity Breakdown
@@ -811,6 +811,67 @@ Only style issues fixed. setfacl requires deep audit for:
 
 **Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
 
+### 40. bin/chio/chio.c
+**Status:** STYLE FIXES ONLY - REQUIRES DEEP SCSI/HARDWARE AUDIT
+**Issues:**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Style:** System headers not alphabetically ordered. **Fixed.**
+
+**Code Analysis:**
+chio is a tape changer control utility (~1239 lines):
+- Controls robotic tape libraries (SCSI media changers)
+- Operations: move, exchange, position, status, return
+- Manages drive/slot/portal/picker elements
+- Barcode (voltag) support for tape identification
+- Direct SCSI device ioctl operations
+
+**WARNING: PARTIAL AUDIT**
+Only style issues fixed. chio requires deep audit for:
+- SCSI device interaction and ioctl validation
+- Element addressing and boundary checking
+- parse_element_* integer parsing functions
+- get_element_status memory handling
+- Hardware state consistency
+- Error handling in SCSI operations
+
+**POSITIVE NOTE:** No atoi() found - good!
+
+**Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
+
+### 41. bin/pkill/pkill.c
+**Status:** STYLE FIXES ONLY - REQUIRES PROCESS SELECTION AUDIT
+**Issues:**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Style:** System headers not alphabetically ordered. **Fixed.**
+
+**Code Analysis:**
+pkill is a process signaling utility (~874 lines):
+- Pattern-based process selection (pgrep/pkill modes)
+- Matches by: regex, user, group, tty, jail, session, parent PID
+- Newest/oldest selection with -n/-o flags
+- Interactive confirmation mode
+- Uses kvm_getprocs() for process table enumeration
+- Signal delivery (pkill) or process listing (pgrep)
+
+**SECURITY IMPORTANCE:**
+- Sends signals to processes (can terminate system-critical processes)
+- Regex pattern matching (potential ReDoS)
+- User/group filtering (privilege separation concerns)
+- Jail-aware (cross-jail signaling considerations)
+
+**WARNING: PARTIAL AUDIT**
+Only style issues fixed. pkill requires deep audit for:
+- Regex compilation and ReDoS risks
+- Process selection logic and privilege checking
+- Integer parsing in makelist() functions
+- kvm_getprocs() error handling
+- Signal delivery correctness and race conditions
+- Edge cases in process matching algorithms
+
+**POSITIVE NOTE:** No atoi() found - uses strtonum()/strtol()
+
+**Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
+
 ---
 
 ## PROGRESS TRACKING AND TODO
@@ -822,10 +883,10 @@ Only style issues fixed. setfacl requires deep audit for:
 **Completion Percentage:** 0.088%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 40/111 bin files reviewed  
-*Note: ed and setfacl are partially audited - need deep reviews*
+**Status:** 42/111 bin files reviewed  
+*Note: ed, setfacl, chio, and pkill are partially audited - need deep reviews*
 
-#### Completed (40 files)
+#### Completed (42 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
