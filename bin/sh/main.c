@@ -32,13 +32,19 @@
  * SUCH DAMAGE.
  */
 
-#include <stdio.h>
-#include <signal.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then sys/ headers, then standard headers.
+ */
+#include <sys/cdefs.h>
 #include <sys/stat.h>
-#include <unistd.h>
+
+#include <errno.h>
 #include <fcntl.h>
 #include <locale.h>
-#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #include "shell.h"
 #include "main.h"
