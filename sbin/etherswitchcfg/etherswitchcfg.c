@@ -470,7 +470,21 @@ atu_flush(struct cfg *cfg, int argc, char *argv[])
 
 	/* note: argv[0] is "flush" */
 	if (argc > 2 && strcasecmp(argv[1], "port") == 0) {
-		p.es_port = atoi(argv[2]);
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+		 * BUG: atoi("9999999999") overflows → wrong switch port!
+		 * BUG: atoi("garbage") returns 0 → affects port 0!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(argv[2], &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > INT_MAX)
+			errx(1, "invalid port number: %s", argv[2]);
+		p.es_port = (int)lval;
 		i = IOETHERSWITCHFLUSHPORT;
 		r = 3;
 	} else if (argc > 1 && strcasecmp(argv[1], "all") == 0) {

@@ -283,8 +283,22 @@ int main (int argc, char **argv)
 
   if(protocol == NULL)
       protnum = 94;
-  else
-      protnum = atoi(protocol);
+  else {
+      /*
+       * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+       * BUG: atoi("9999999999") overflows → wrong protocol!
+       * BUG: atoi("garbage") returns 0 → protocol 0 (invalid)!
+       * Use strtol() for proper validation.
+       */
+      char *endptr;
+      long lval;
+
+      errno = 0;
+      lval = strtol(protocol, &endptr, 10);
+      if (errno != 0 || *endptr != '\0' || lval < 0 || lval > 255)
+          err(1, "invalid protocol number: %s", protocol);
+      protnum = (int)lval;
+  }
 
   if (argc == 1) {
       target = *argv;

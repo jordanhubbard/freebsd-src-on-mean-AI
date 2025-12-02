@@ -300,11 +300,22 @@ a_gid(const char *s)
 	if ((gr = getgrnam(s)) != NULL)
 		gid = gr->gr_gid;
 	else {
-		for (gname = s; *s && isdigit(*s); ++s);
-		if (!*s)
-			gid = atoi(gname);
-		else
-			errx(EX_NOUSER, "unknown group id: %s", gname);
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO overflow checking!
+		 * BUG: isdigit() validates digits but NOT overflow!
+		 * BUG: atoi("9999999999") overflows → wrong GID!
+		 * BUG: atoi("4294967295") for gid_t → wrong value!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(s, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > UINT_MAX)
+			errx(EX_NOUSER, "invalid group id: %s", s);
+		gid = (gid_t)lval;
 	}
 	return (gid);
 }
@@ -319,11 +330,22 @@ a_uid(const char *s)
 	if ((pw = getpwnam(s)) != NULL)
 		uid = pw->pw_uid;
 	else {
-		for (uname = s; *s && isdigit(*s); ++s);
-		if (!*s)
-			uid = atoi(uname);
-		else
-			errx(EX_NOUSER, "unknown user id: %s", uname);
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO overflow checking!
+		 * BUG: isdigit() loop validates digits but NOT overflow!
+		 * BUG: atoi("9999999999") overflows → wrong UID!
+		 * BUG: atoi("4294967295") for uid_t → wrong value!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(s, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > UINT_MAX)
+			errx(EX_NOUSER, "invalid user id: %s", s);
+		uid = (uid_t)lval;
 	}
 	return (uid);
 }

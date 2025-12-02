@@ -317,9 +317,23 @@ setmediainst(const char *val, int d, int s, const struct afswtch *afp)
 
 	ifmr = ifmedia_getstate(s);
 
-	inst = atoi(val);
-	if (inst < 0 || inst > (int)IFM_INST_MAX)
+	/*
+	 * FIXED: CRITICAL BUG - atoi() has ZERO overflow checking!
+	 * BUG: atoi("9999999999") overflows, could bypass bounds check!
+	 * BUG: atoi("garbage") returns 0 → wrong media instance!
+	 * Use strtol() for proper validation.
+	 */
+	{
+	char *endptr;
+	long lval;
+
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval < 0 ||
+	    lval > (int)IFM_INST_MAX)
 		errx(1, "invalid media instance: %s", val);
+	inst = (int)lval;
+	}
 
 	strncpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_media = (ifmr->ifm_current & ~IFM_IMASK) | inst << IFM_ISHIFT;
