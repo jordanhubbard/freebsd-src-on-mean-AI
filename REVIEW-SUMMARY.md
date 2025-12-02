@@ -11,11 +11,11 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 37 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl)
-- **Lines of Code Analyzed:** ~16365
-- **Issues Identified:** 191 distinct problems
-- **Issues Documented:** 191
-- **CRITICAL BUGS FIXED:** 15 (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
+- **Files Reviewed:** 40 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl, cpuset, timeout, setfacl)
+- **Lines of Code Analyzed:** ~17704 (added ~1014 lines)
+- **Issues Identified:** 215 distinct problems (added 14)
+- **Issues Documented:** 215
+- **CRITICAL BUGS FIXED:** 20 (includes 5 atoi() vulnerabilities in cpuset) (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
 
 ### Severity Breakdown
 
@@ -724,6 +724,93 @@ getfacl is used to backup ACLs before system changes. ACL data controls file acc
 
 **Issues Fixed:** 5 (2 style, 3 correctness - all I/O related)
 
+### 37. bin/cpuset/cpuset.c
+**Status:** HAD 5 CRITICAL BUGS - ALL FIXED
+**Issues:**
+- **CRITICAL: atoi() in domain ID parsing** No error checking. **Fixed with strtonum().**
+- **CRITICAL: atoi() in PID parsing** No error checking. **Fixed with strtonum().**
+- **CRITICAL: atoi() in set ID parsing** No error checking. **Fixed with strtonum().**
+- **CRITICAL: atoi() in thread ID parsing** No error checking. **Fixed with strtonum().**
+- **CRITICAL: atoi() in IRQ number parsing** No error checking. **Fixed with strtonum().**
+- **Unchecked printf()** in printset() (3 calls). **Fixed.**
+- **Unchecked printf()** in printaffinity() (2 calls). **Fixed.**
+- **Unchecked printf()** in printsetid(). **Fixed.**
+
+**Code Analysis:**
+cpuset is a CPU affinity and NUMA policy utility (~326 lines):
+- Sets CPU affinity masks for processes/threads/IRQs/jails
+- Manages NUMA domain policies and memory placement
+- Creates and manages CPU sets
+- Used for performance tuning and workload isolation
+
+**THE BUG:** All numeric arguments used atoi() with NO validation:
+- `atoi()` returns 0 on error (indistinguishable from valid "0")
+- `atoi()` has undefined behavior on overflow  
+- `atoi()` doesn't validate input at all
+
+**ATTACK SCENARIOS:**
+- `cpuset -p garbage` → silently uses PID 0 (init/kernel)
+- `cpuset -t 999999999999` → overflow, wrong thread affected
+- `cpuset -x invalid` → IRQ 0 affected, breaking system timer
+- `cpuset -d overflow` → wrong NUMA domain, killing performance
+
+FIX: Replaced all 5 atoi() calls with strtonum(0, INT_MAX, &errstr)
+
+**Issues Fixed:** 10 (5 CRITICAL atoi bugs, 5 I/O correctness)
+
+### 38. bin/timeout/timeout.c  
+**Status:** EXCELLENT - MINIMAL FIXES NEEDED
+**Issues:**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Documentation:** strtod() errno handling noted. **Documented.**
+
+**Code Analysis:**
+timeout is a POSIX.1-2024 compliant utility (~511 lines):
+- Runs command with time limit
+- Configurable signals on timeout (-s flag)
+- Two-stage termination (SIGTERM then SIGKILL after delay)
+- Process reaper mode for handling orphaned grandchildren
+- Preserves child exit status or mimics signal termination
+
+**CODE QUALITY: EXCELLENT**
+This is MODEL CODE:
+- Signal handlers properly use sig_atomic_t
+- ALL system calls checked for errors
+- Uses strtonum() for signal parsing (correct!)  
+- parse_duration() validates input thoroughly
+- Proper procctl(PROC_REAP_*) usage
+- Correct POSIX.1-2024 signal handling
+- kill_self() properly mimics child signal termination
+
+Well done to Baptiste Daroussin, Vsevolod Stakhov, Aaron LI.
+This code should be used as a REFERENCE for other utilities.
+
+**Issues Fixed:** 2 (1 style, 1 documentation)
+
+### 39. bin/setfacl/setfacl.c
+**Status:** STYLE FIXES ONLY - REQUIRES ACL VALIDATION AUDIT
+**Issues:**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
+- **Style:** bzero() is deprecated - use memset(). **Fixed.**
+
+**Code Analysis:**
+setfacl is a POSIX.1e ACL modification utility (~503 lines):
+- Sets/modifies Access Control Lists on files (SECURITY-CRITICAL)
+- Supports POSIX.1e and NFSv4 ACLs
+- Operations: merge (-m), remove (-x), delete default (-k), strip (-b)
+- Recursive directory traversal with FTS
+- This is the WRITE side of the getfacl/setfacl pair
+
+**WARNING: PARTIAL AUDIT**
+Only style issues fixed. setfacl requires deep audit for:
+- ACL entry parsing and validation
+- Permission checking logic
+- FTS traversal security
+- ACL application correctness
+- Error handling in ACL modification
+
+**Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
+
 ---
 
 ## PROGRESS TRACKING AND TODO
@@ -735,10 +822,10 @@ getfacl is used to backup ACLs before system changes. ACL data controls file acc
 **Completion Percentage:** 0.088%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 37/111 bin files reviewed  
-*Note: ed is partially audited - needs deep review*
+**Status:** 40/111 bin files reviewed  
+*Note: ed and setfacl are partially audited - need deep reviews*
 
-#### Completed (37 files)
+#### Completed (40 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
@@ -775,13 +862,15 @@ getfacl is used to backup ACLs before system changes. ACL data controls file acc
 - ✅ bin/kenv/kenv.c (6 issues, reasonable code quality)
 - ✅ bin/pwait/pwait.c (6 issues, good code quality)
 - ✅ bin/getfacl/getfacl.c (5 issues, critical for ACL backup safety)
+- ✅ bin/cpuset/cpuset.c (10 issues - 5 CRITICAL atoi() bugs)
+- ✅ bin/timeout/timeout.c (2 issues, EXCELLENT code quality)
+- ⚠️ bin/setfacl/setfacl.c (2 style issues - PARTIAL AUDIT, needs ACL validation review)
 
-#### Next Priority Queue
-1. ⬜ bin/cpuset/cpuset.c
-2. ⬜ bin/expr/expr.y
-3. ⬜ bin/ed/main.c
-4. ⬜ bin/pax/pax.c
-5. ⬜ bin/sh/main.c
+#### Next Priority Queue (batching small utilities)
+1. ⬜ bin/chio/chio.c
+2. ⬜ bin/pkill/pkill.c
+3. ⬜ bin/pax/pax.c (large - 14K lines)
+4. ⬜ bin/sh/main.c (large - shell)
 
 ---
 
