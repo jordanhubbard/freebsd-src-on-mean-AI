@@ -35,17 +35,23 @@
  * Additional Copyright (c) 2000, by C. Stephen Gunn, Waterspout Communications
  */
 
-#include <sys/param.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/chio.h> 
+#include <sys/param.h>
+
 #include <err.h>
 #include <fcntl.h>
-#include <stdio.h>
+#include <langinfo.h>
+#include <locale.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <langinfo.h>
-#include <locale.h>
 
 #include "defs.h"
 #include "pathnames.h"
