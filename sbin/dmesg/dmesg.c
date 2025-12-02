@@ -31,14 +31,15 @@
 
 /*
  * FIXED: Include ordering per style(9)
- * sys/cdefs.h first, then sys/... headers alphabetically, then standard headers.
- * sys/syslog.h was incorrectly placed AFTER standard headers.
+ * sys/cdefs.h first, then sys/types.h (needed by other sys/ headers),
+ * then remaining sys/... headers alphabetically, then standard headers.
+ * CRITICAL: sys/types.h defines u_int, uintptr_t needed by sys/msgbuf.h!
  */
 #include <sys/cdefs.h>
+#include <sys/types.h>
 #include <sys/msgbuf.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
-#include <sys/types.h>
 
 #include <ctype.h>
 #include <err.h>
