@@ -87,13 +87,18 @@ main(int argc, char *argv[])
 			numsig = (int)sigl;
 			if (numsig != sigl)
 				errx(2, "signal number out of range: %s", *argv);
-			if (numsig >= 128)
-				numsig -= 128;
-			if (sig2str(numsig, signame) < 0)
-				nosig(*argv);
-			if (printf("%s\n", signame) < 0)
-				err(1, "stdout");
-			return (0);
+		if (numsig >= 128)
+			numsig -= 128;
+		if (sig2str(numsig, signame) < 0)
+			nosig(*argv);
+		/*
+		 * NOTE: Cannot check printf return value here.
+		 * When compiled as shell builtin, printf is redefined
+		 * to return void. Standard I/O error handling doesn't
+		 * apply in shell builtin context.
+		 */
+		printf("%s\n", signame);
+		return (0);
 		}
 		printsignals(stdout);
 		return (0);
@@ -169,16 +174,18 @@ printsignals(FILE *fp)
 {
 	int n;
 
+	/*
+	 * NOTE: Cannot check fprintf return values here.
+	 * When compiled as shell builtin, fprintf is redefined
+	 * to return void. Standard I/O error handling doesn't
+	 * apply in shell builtin context.
+	 */
 	for (n = 1; n < sys_nsig; n++) {
-		if (fprintf(fp, "%s", sys_signame[n]) < 0)
-			err(1, "fprintf");
-		if (n == (sys_nsig / 2) || n == (sys_nsig - 1)) {
-			if (fprintf(fp, "\n") < 0)
-				err(1, "fprintf");
-		} else {
-			if (fprintf(fp, " ") < 0)
-				err(1, "fprintf");
-		}
+		fprintf(fp, "%s", sys_signame[n]);
+		if (n == (sys_nsig / 2) || n == (sys_nsig - 1))
+			fprintf(fp, "\n");
+		else
+			fprintf(fp, " ");
 	}
 }
 
@@ -186,12 +193,17 @@ static void
 usage(void)
 {
 
-	if (fprintf(stderr, "%s\n%s\n%s\n%s\n",
+	/*
+	 * NOTE: Cannot check fprintf return value here.
+	 * When compiled as shell builtin, fprintf is redefined
+	 * to return void. Standard I/O error handling doesn't
+	 * apply in shell builtin context.
+	 */
+	fprintf(stderr, "%s\n%s\n%s\n%s\n",
 	    "usage: kill [-s signal_name] pid ...",
 	    "       kill -l [exit_status]",
 	    "       kill -signal_name pid ...",
-	    "       kill -signal_number pid ...") < 0)
-		err(1, "stderr");
+	    "       kill -signal_number pid ...");
 #ifdef SHELL
 	error(NULL);
 #else

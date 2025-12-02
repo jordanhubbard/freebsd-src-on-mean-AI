@@ -58,4 +58,29 @@
 - **Prevention:** Automated pre-commit hook to grep for `sys/\*` in comments
 - **Lesson:** Documentation alone is insufficient. Humans (and AIs) make the same mistakes repeatedly. AUTOMATE THE CHECK.
 
+## 7. Shell Builtin Redefinitions Break Standard Assumptions
+**Case Study:** `bin/kill/kill.c` with `#ifdef SHELL`
+- **The Bug:** Checking `printf`/`fprintf` return values caused compilation errors
+- **The Error:** `error: invalid operands to binary expression ('void' and 'int')`
+- **The Cause:** When compiled as shell builtin, `bltin/bltin.h` redefines `printf` and `fprintf` to return `void` instead of `int`
+- **The Impact:** Standard C assumption that printf returns int is WRONG in shell builtin context
+- **The Reality:** FreeBSD utilities often serve dual purposes:
+  1. Standalone programs (`/bin/kill`)
+  2. Shell builtins (for performance)
+  - When used as builtins, I/O is handled differently by the shell
+  - Standard I/O functions are redefined for shell integration
+- **Lesson:** **Context matters!** Don't blindly apply "best practices" without understanding the compilation context:
+  - Check for `#ifdef SHELL` or similar conditional compilation
+  - Shell builtins may redefine standard functions
+  - What's correct for standalone programs may be wrong for builtins
+  - Read the headers being included (`bltin/bltin.h`, etc.)
+- **Rule:** Before adding I/O error checking, verify the function actually returns `int` in ALL compilation contexts
+
+**FILES WITH DUAL COMPILATION:**
+- `bin/kill/kill.c` - standalone + shell builtin
+- `bin/test/test.c` - standalone + shell builtin (also has `#ifdef SHELL`)
+- Likely others in bin/ directory
+
+**PREVENTION:** Search for `#ifdef SHELL` before adding printf/fprintf error checks.
+
 *Add to this file as new classes of bugs are discovered.*
