@@ -83,4 +83,64 @@
 
 **PREVENTION:** Search for `#ifdef SHELL` before adding printf/fprintf error checks.
 
+## 8. Include Ordering: sys/types.h is SPECIAL (Not Just Alphabetical!)
+
+**Date:** Tuesday Dec 2, 2025  
+**File:** `sbin/dmesg/dmesg.c`  
+**Error Type:** Build break - missing type definitions
+
+### What Happened
+
+I alphabetized ALL `sys/` headers, including `sys/types.h`:
+```c
+#include <sys/cdefs.h>
+#include <sys/msgbuf.h>   // WRONG ORDER!
+#include <sys/sysctl.h>
+#include <sys/syslog.h>
+#include <sys/types.h>    // TOO LATE!
+```
+
+This caused build errors because `sys/msgbuf.h` uses types defined in `sys/types.h`:
+- `u_int` (unsigned int)
+- `uintptr_t` (pointer-sized integer)
+- Other fundamental types
+
+### Root Cause
+
+**sys/types.h defines FUNDAMENTAL TYPES** that other system headers depend on. It cannot be alphabetized with other `sys/` headers - it must come EARLY.
+
+### The Correct Ordering Rule
+
+```c
+1. #include <sys/cdefs.h>     // ALWAYS FIRST
+2. #include <sys/types.h>      // SECOND (defines basic types)
+3. #include <sys/...>          // Other sys/ headers alphabetically
+4. #include <standard.h>       // Standard headers alphabetically
+```
+
+### Why This Matters
+
+Many system headers have dependencies:
+- `sys/msgbuf.h` needs `u_int` from `sys/types.h`
+- `sys/lock.h` needs `uintptr_t` from `sys/types.h`
+- Other headers may need `size_t`, `ssize_t`, etc.
+
+### Prevention
+
+**CRITICAL RULE**: When reordering includes:
+1. `sys/cdefs.h` is ALWAYS first
+2. `sys/types.h` is ALWAYS second (if needed)
+3. `sys/param.h` often comes early too (includes sys/types.h)
+4. ONLY THEN alphabetize remaining `sys/` headers
+5. Then alphabetize standard headers
+
+**DO NOT blindly alphabetize ALL sys/ headers!**
+
+**SPECIAL HEADERS THAT COME EARLY:**
+- `sys/cdefs.h` - always first
+- `sys/types.h` - defines fundamental types
+- `sys/param.h` - includes sys/types.h, defines system parameters
+
+---
+
 *Add to this file as new classes of bugs are discovered.*
