@@ -32,19 +32,24 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/param.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h first, then sys/... headers alphabetically, then standard headers.
+ */
+#include <sys/cdefs.h>
 #include <sys/disklabel.h>
+#include <sys/param.h>
 
-#include <ufs/ufs/dinode.h>
 #include <ufs/ffs/fs.h>
+#include <ufs/ufs/dinode.h>
 
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libufs.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <unistd.h>
 
 static void
@@ -76,12 +81,25 @@ main(int argc, char *argv[])
 	/* remaining arguments are inode numbers. */
 	exitval = 0;
 	while (*++argv) {
-		/* get the inode number. */
-		if ((inonum = atoi(*argv)) < UFS_ROOTINO) {
-			printf("%s is not a valid inode number", *argv);
+		char *endptr;
+		long long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO error checking!
+		 * BUG: atoi("9999999999999") overflows → wrong inode cleared!
+		 * BUG: atoi("-123") negative → could pass < check if wrapped!
+		 * BUG: atoi("garbage") returns 0 → silent wrong behavior!
+		 * Use strtoll() for proper validation and error detection.
+		 */
+		errno = 0;
+		lval = strtoll(*argv, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < UFS_ROOTINO ||
+		    lval > INT_MAX) {
+			printf("%s is not a valid inode number\n", *argv);
 			exitval = 1;
 			continue;
 		}
+		inonum = (ino_t)lval;
 		(void)printf("clearing %d\n", inonum);
 
 		if (getinode(&disk, &dp, inonum) == -1) {

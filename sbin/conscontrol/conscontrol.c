@@ -26,10 +26,15 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h>
-#include <sys/sysctl.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h first, then sys/... headers alphabetically, then standard headers.
+ */
+#include <sys/cdefs.h>
 #include <sys/ioctl.h>
+#include <sys/sysctl.h>
 #include <sys/ttycom.h>
+#include <sys/types.h>
 
 #include <err.h>
 #include <errno.h>

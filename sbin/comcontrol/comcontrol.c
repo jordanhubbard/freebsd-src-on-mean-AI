@@ -28,7 +28,14 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h first, then sys/... headers alphabetically, then standard headers.
+ */
 #include <sys/cdefs.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
@@ -37,8 +44,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/ioctl.h>
 
 static void usage(void) __dead2;
 
@@ -83,15 +88,30 @@ main(int argc, char *argv[])
 		printf("\n");
 	} else {
 		while (argv[2] != NULL) {
-			if (!strcmp(argv[2],"drainwait")) {
-				if (drainwait >= 0)
-					usage();
-				if (argv[3] == NULL || !isdigit(argv[3][0]))
-					usage();
-				drainwait = atoi(argv[3]);
-				argv += 2;
-			} else
+		if (!strcmp(argv[2],"drainwait")) {
+			char *endptr;
+			long lval;
+
+			if (drainwait >= 0)
 				usage();
+			if (argv[3] == NULL)
+				usage();
+			/*
+			 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+			 * BUG: isdigit() only checks FIRST character!
+			 * BUG: atoi("9999999999") overflows → wrong value!
+			 * BUG: atoi("123garbage") silently accepts garbage!
+			 * Use strtol() for proper validation.
+			 */
+			errno = 0;
+			lval = strtol(argv[3], &endptr, 10);
+			if (errno != 0 || *endptr != '\0' || lval < 0 ||
+			    lval > INT_MAX)
+				errx(1, "invalid drainwait value: %s", argv[3]);
+			drainwait = (int)lval;
+			argv += 2;
+		} else
+			usage();
 		}
 		if (drainwait >= 0) {
 			if (ioctl(fd, TIOCSDRAINWAIT, &drainwait) < 0) {
