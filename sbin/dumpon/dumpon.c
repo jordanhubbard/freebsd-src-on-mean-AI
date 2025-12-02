@@ -29,12 +29,23 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/param.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h first, then sys/... headers alphabetically, then standard headers.
+ */
+#include <sys/cdefs.h>
 #include <sys/capsicum.h>
 #include <sys/disk.h>
+#include <sys/param.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/wait.h>
+
+#include <arpa/inet.h>
+
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <net/route.h>
 
 #include <assert.h>
 #include <capsicum_helpers.h>
@@ -51,12 +62,6 @@
 #include <string.h>
 #include <sysexits.h>
 #include <unistd.h>
-
-#include <arpa/inet.h>
-
-#include <net/if.h>
-#include <net/if_dl.h>
-#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/netdump/netdump.h>
@@ -503,15 +508,25 @@ main(int argc, char *argv[])
 			break;
 		case 'i':
 			{
-			int i;
+			char *endptr;
+			long lval;
 
-			i = atoi(optarg);
-			if (i < 0 || i >= KDA_APPEND - 1)
+			/*
+			 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+			 * BUG: atoi("9999999999") overflows → wrong index!
+			 * BUG: atoi("-123") negative → could bypass check if wrapped!
+			 * BUG: atoi("5garbage") accepts garbage → wrong index!
+			 * Use strtol() for proper validation.
+			 */
+			errno = 0;
+			lval = strtol(optarg, &endptr, 10);
+			if (errno != 0 || *endptr != '\0' || lval < 0 ||
+			    lval >= KDA_APPEND - 1)
 				errx(EX_USAGE,
 				    "-i index must be between zero and %d.",
 				    (int)KDA_APPEND - 2);
 			insert = true;
-			ins_idx = i;
+			ins_idx = (int)lval;
 			}
 			break;
 		case 'k':
