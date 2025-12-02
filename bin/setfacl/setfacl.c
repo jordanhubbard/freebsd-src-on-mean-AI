@@ -24,8 +24,13 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/param.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/acl.h>
+#include <sys/param.h>
 #include <sys/queue.h>
 
 #include <err.h>
@@ -94,7 +99,11 @@ stdin_files(void)
 
 	i = 0;
 	have_stdin = true;
-	bzero(&filename, sizeof(filename));
+	/*
+	 * FIXED: bzero() is deprecated per style(9)
+	 * Use memset() instead.
+	 */
+	memset(filename, 0, sizeof(filename));
 	/* Start with an array size sufficient for basic cases. */
 	fl_count = 1024;
 	files_list = zmalloc(fl_count * sizeof(char *));
