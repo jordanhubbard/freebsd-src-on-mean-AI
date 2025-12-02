@@ -26,6 +26,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/fcntl.h>
 #include <sys/procctl.h>
 #include <sys/resource.h>
@@ -86,6 +91,13 @@ parse_duration(const char *duration)
 	double ret;
 	char *suffix;
 
+	/*
+	 * POTENTIAL ISSUE: strtod() doesn't check errno
+	 * strtod() can set errno to ERANGE on overflow/underflow.
+	 * However, the subsequent range check (ret < 0 || ret >= 100000000UL)
+	 * catches extreme values. For timeout durations, this is sufficient.
+	 * Documented for completeness.
+	 */
 	ret = strtod(duration, &suffix);
 	if (suffix == duration)
 		errx(EXIT_INVALID, "duration is not a number");
