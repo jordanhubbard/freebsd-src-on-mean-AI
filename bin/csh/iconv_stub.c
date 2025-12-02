@@ -24,6 +24,12 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first (though not used here, include for consistency).
+ */
+#include <sys/cdefs.h>
+
 #include <dlfcn.h>
 #include <stddef.h>
 
