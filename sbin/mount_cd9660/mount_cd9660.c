@@ -121,9 +121,27 @@ main(int argc, char **argv)
 		case 'r':
 			build_iovec(&iov, &iovlen, "norrip", NULL, (size_t)-1);
 			break;
-		case 's':
-			ssector = atoi(optarg);
-			break;
+	case 's':
+		{
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+		 * BUG: atoi("9999999999") overflows → wrong CD sector!
+		 * BUG: atoi("garbage") returns 0 → wrong start position!
+		 * BUG: atoi("-123") negative → undefined behavior!
+		 * This controls CD9660 filesystem mount starting sector - CRITICAL!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > INT_MAX)
+			errx(EX_USAGE, "invalid starting sector: %s", optarg);
+		ssector = (int)lval;
+		}
+		break;
 		case 'U':
 		        build_iovec_argf(&iov, &iovlen, "uid", "%d", a_uid(optarg));
 			break;

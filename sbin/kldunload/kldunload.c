@@ -88,9 +88,23 @@ main(int argc, char** argv)
 
 	while ((filename = *argv++) != NULL) {
 		if (opt & OPT_ID) {
-			fileid = atoi(filename);
-			if (fileid < 0)
-				errx(EXIT_FAILURE, "Invalid ID %s", optarg);
+			char *endptr;
+			long lval;
+
+			/*
+			 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+			 * BUG: atoi("9999999999") overflows → wrong module unloaded!
+			 * BUG: atoi("garbage") returns 0 → unloads module 0!
+			 * BUG: atoi("-999") could pass if wrapped!
+			 * This controls KERNEL MODULE LOADING - CRITICAL!
+			 * Use strtol() for proper validation.
+			 */
+			errno = 0;
+			lval = strtol(filename, &endptr, 10);
+			if (errno != 0 || *endptr != '\0' || lval < 0 ||
+			    lval > INT_MAX)
+				errx(EXIT_FAILURE, "Invalid ID %s", filename);
+			fileid = (int)lval;
 		} else {
 			if ((fileid = kldfind(filename)) < 0)
 				errx(EXIT_FAILURE, "can't find file %s",

@@ -135,11 +135,27 @@ main(int argc, char *argv[])
 		case 'a':
 			aflag++;
 			break;
-		case 'c':
-			if (cflag)
-				usage();
-			cflag = atoi(optarg);
-			break;
+	case 'c':
+		{
+		char *endptr;
+		long lval;
+
+		if (cflag)
+			usage();
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+		 * BUG: atoi("9999999999") overflows → wrong value!
+		 * BUG: atoi("garbage") returns 0 → silent wrong behavior!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > INT_MAX)
+			errx(1, "invalid -c value: %s", optarg);
+		cflag = (int)lval;
+		}
+		break;
 		case 'g':
 			gflag++;
 			break;
@@ -149,9 +165,25 @@ main(int argc, char *argv[])
 		case 'v':
 			vflag++;
 			break;
-		case 'l':
-			maxrun = atoi(optarg);
-			break;
+	case 'l':
+		{
+		char *endptr;
+		long lval;
+
+		/*
+		 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+		 * BUG: atoi("9999999999") overflows → wrong max processes!
+		 * BUG: atoi("garbage") returns 0 → could deadlock!
+		 * Use strtol() for proper validation.
+		 */
+		errno = 0;
+		lval = strtol(optarg, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || lval < 0 ||
+		    lval > INT_MAX)
+			errx(1, "invalid -l value: %s", optarg);
+		maxrun = (int)lval;
+		}
+		break;
 		default:
 			usage();
 		}
