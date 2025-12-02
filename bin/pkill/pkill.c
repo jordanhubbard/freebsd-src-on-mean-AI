@@ -32,13 +32,18 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/types.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/param.h>
-#include <sys/sysctl.h>
 #include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <sys/user.h>
 
 #include <assert.h>
