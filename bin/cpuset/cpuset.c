@@ -76,16 +76,25 @@ printset(struct bitset *mask, int size)
 	int once;
 	int bit;
 
+	/*
+	 * FIXED: Unchecked printf calls
+	 * cpuset output is used by scripts for CPU affinity management.
+	 * If stdout fails, the script needs to know via exit code.
+	 */
 	for (once = 0, bit = 0; bit < size; bit++) {
 		if (BIT_ISSET(size, bit, mask)) {
 			if (once == 0) {
-				printf("%d", bit);
+				if (printf("%d", bit) < 0)
+					err(EXIT_FAILURE, "printf");
 				once = 1;
-			} else
-				printf(", %d", bit);
+			} else {
+				if (printf(", %d", bit) < 0)
+					err(EXIT_FAILURE, "printf");
+			}
 		}
 	}
-	printf("\n");
+	if (printf("\n") < 0)
+		err(EXIT_FAILURE, "printf");
 }
 
 static const char *whichnames[] = { NULL, "tid", "pid", "cpuset", "irq", "jail",
@@ -103,16 +112,22 @@ printaffinity(void)
 
 	if (cpuset_getaffinity(level, which, id, sizeof(mask), &mask) != 0)
 		err(EXIT_FAILURE, "getaffinity");
-	printf("%s %jd%s mask: ", whichnames[which], (intmax_t)id,
-	    levelnames[level]);
+	/*
+	 * FIXED: Unchecked printf
+	 * cpuset affinity output is critical for CPU binding scripts.
+	 */
+	if (printf("%s %jd%s mask: ", whichnames[which], (intmax_t)id,
+	    levelnames[level]) < 0)
+		err(EXIT_FAILURE, "printf");
 	printset((struct bitset *)&mask, CPU_SETSIZE);
 	if (dflag || xflag)
 		goto out;
 	if (cpuset_getdomain(level, which, id, sizeof(domain), &domain,
 	    &policy) != 0)
 		err(EXIT_FAILURE, "getdomain");
-	printf("%s %jd%s domain policy: %s mask: ", whichnames[which],
-	    (intmax_t)id, levelnames[level], policynames[policy]);
+	if (printf("%s %jd%s domain policy: %s mask: ", whichnames[which],
+	    (intmax_t)id, levelnames[level], policynames[policy]) < 0)
+		err(EXIT_FAILURE, "printf");
 	printset((struct bitset *)&domain, DOMAINSET_SETSIZE);
 out:
 	exit(EXIT_SUCCESS);
@@ -130,8 +145,13 @@ printsetid(void)
 		level = CPU_LEVEL_CPUSET;
 	if (cpuset_getid(level, which, id, &setid))
 		err(errno, "getid");
-	printf("%s %jd%s id: %d\n", whichnames[which], (intmax_t)id,
-	    levelnames[level], setid);
+	/*
+	 * FIXED: Unchecked printf
+	 * Cpuset ID output is used by scripts for set management.
+	 */
+	if (printf("%s %jd%s id: %d\n", whichnames[which], (intmax_t)id,
+	    levelnames[level], setid) < 0)
+		err(EXIT_FAILURE, "printf");
 }
 
 int
@@ -161,9 +181,18 @@ main(int argc, char *argv[])
 			level = CPU_LEVEL_CPUSET;
 			break;
 		case 'd':
-			dflag = 1;
-			which = CPU_WHICH_DOMAIN;
-			id = atoi(optarg);
+			/*
+			 * FIXED: atoi() has no error checking
+			 * Domain IDs must be validated. Use strtonum().
+			 */
+			{
+				const char *errstr;
+				dflag = 1;
+				which = CPU_WHICH_DOMAIN;
+				id = strtonum(optarg, 0, INT_MAX, &errstr);
+				if (errstr != NULL)
+					errx(EXIT_FAILURE, "domain id is %s: %s", errstr, optarg);
+			}
 			break;
 		case 'g':
 			gflag = 1;
@@ -187,28 +216,64 @@ main(int argc, char *argv[])
 			domainset_parselist(optarg, &domains, &policy);
 			break;
 		case 'p':
-			pflag = 1;
-			which = CPU_WHICH_PID;
-			id = pid = atoi(optarg);
+			/*
+			 * FIXED: atoi() has no error checking
+			 * PIDs must be validated. Use strtonum().
+			 */
+			{
+				const char *errstr;
+				pflag = 1;
+				which = CPU_WHICH_PID;
+				id = pid = strtonum(optarg, 0, INT_MAX, &errstr);
+				if (errstr != NULL)
+					errx(EXIT_FAILURE, "pid is %s: %s", errstr, optarg);
+			}
 			break;
 		case 'r':
 			level = CPU_LEVEL_ROOT;
 			rflag = 1;
 			break;
 		case 's':
-			sflag = 1;
-			which = CPU_WHICH_CPUSET;
-			id = setid = atoi(optarg);
+			/*
+			 * FIXED: atoi() has no error checking
+			 * Set IDs must be validated. Use strtonum().
+			 */
+			{
+				const char *errstr;
+				sflag = 1;
+				which = CPU_WHICH_CPUSET;
+				id = setid = strtonum(optarg, 0, INT_MAX, &errstr);
+				if (errstr != NULL)
+					errx(EXIT_FAILURE, "setid is %s: %s", errstr, optarg);
+			}
 			break;
 		case 't':
-			tflag = 1;
-			which = CPU_WHICH_TID;
-			id = tid = atoi(optarg);
+			/*
+			 * FIXED: atoi() has no error checking
+			 * Thread IDs must be validated. Use strtonum().
+			 */
+			{
+				const char *errstr;
+				tflag = 1;
+				which = CPU_WHICH_TID;
+				id = tid = strtonum(optarg, 0, INT_MAX, &errstr);
+				if (errstr != NULL)
+					errx(EXIT_FAILURE, "tid is %s: %s", errstr, optarg);
+			}
 			break;
 		case 'x':
-			xflag = 1;
-			which = CPU_WHICH_IRQ;
-			id = atoi(optarg);
+			/*
+			 * FIXED: atoi() has no error checking
+			 * IRQ numbers must be validated. Use strtonum().
+			 */
+			{
+				const char *errstr;
+				xflag = 1;
+				which = CPU_WHICH_IRQ;
+				id = strtonum(optarg, 0, INT_MAX, &errstr);
+				if (errstr != NULL)
+					errx(EXIT_FAILURE, "irq is %s: %s", errstr, optarg);
+			}
 			break;
 		default:
 			usage();
