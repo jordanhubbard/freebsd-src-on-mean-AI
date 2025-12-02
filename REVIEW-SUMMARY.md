@@ -11,11 +11,11 @@
 
 ### Review Statistics
 
-- **Files Reviewed:** 44 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl, cpuset, timeout, setfacl, chio, pkill, csh/iconv_stub, pax/options)
-- **Lines of Code Analyzed:** ~21472 (added ~1655 lines: csh/iconv_stub 78 + pax/options 1577)
-- **Issues Identified:** 228 distinct problems (added 9: 5 in pax, 1 in csh, 4 style)
-- **Issues Documented:** 228
-- **CRITICAL BUGS FIXED:** 22 (added 2 atoi() bugs in pax!) (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
+- **Files Reviewed:** 45 (cat, echo, pwd, hostname, sync, domainname, realpath, rmdir, sleep, nproc, stty, gfmt, kill, mkdir, ln, chmod, cp, cp/utils, mv, rm, ls, ls/print, ls/util, ls/cmp, dd, df, ps, cat/Makefile, date, test, expr, ed/main.c+ed.h, uuidgen, chflags, kenv, pwait, getfacl, cpuset, timeout, setfacl, chio, pkill, csh/iconv_stub, pax/options, sh/main)
+- **Lines of Code Analyzed:** ~21821 (added ~349 lines: sh/main 349)
+- **Issues Identified:** 231 distinct problems (added 3 style issues in sh/main)
+- **Issues Documented:** 231
+- **CRITICAL BUGS FIXED:** 22 (cpuset: 5, pax: 2, others: 15) (gethostname buffer overrun, getdomainname buffer overrun, st_blksize validation, stty integer truncation, gfmt unchecked strtoul, kill signal number overflow, mkdir dirname argv corruption, ln TOCTOU race condition, cp uninitialized stat buffer, cp/utils unchecked sysconf, mv vfork error handling x2, date integer overflow, test integer truncation, uuidgen heap overflow)
 
 ### Severity Breakdown
 
@@ -883,10 +883,10 @@ Only style issues fixed. pkill requires deep audit for:
 **Completion Percentage:** 0.088%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 44/111 bin files reviewed (39.6%)  
-*Note: ed, setfacl, chio, pkill, and pax are partially audited - need deep reviews*
+**Status:** 45/111 bin files reviewed (40.5%)  
+*Note: ed, setfacl, chio, pkill, pax, and sh are partially audited - need deep reviews*
 
-#### Completed (44 files)
+#### Completed (45 files)
 - ✅ bin/cat/cat.c (33 issues)
 - ✅ bin/echo/echo.c (4 issues)
 - ✅ bin/pwd/pwd.c (6 issues)
