@@ -33,16 +33,22 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h>
-#include <sys/stat.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h must be first, then system headers alphabetically.
+ */
+#include <sys/cdefs.h>
 #include <sys/mtio.h>
-#include <stdio.h>
-#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include <errno.h>
-#include <unistd.h>
-#include <stdlib.h>
 #include <limits.h>
 #include <paths.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include "pax.h"
 #include "options.h"
 #include "cpio.h"
@@ -407,13 +413,22 @@ pax_options(int argc, char **argv)
 			 * non-standard limit on read faults
 			 * 0 indicates stop after first error, values
 			 * indicate a limit, "NONE" try forever
+			 * FIXED: atoi() has no error checking - replaced with strtonum()
+			 * BUG: atoi("garbage") returns 0, not an error!
+			 *      atoi() check "< 0" accepts 0 as valid, but doesn't detect errors
 			 */
-			flg |= CEF;
-			if (strcmp(NONE, optarg) == 0)
-				maxflt = -1;
-			else if ((maxflt = atoi(optarg)) < 0) {
-				paxwarn(1, "Error count value must be positive");
-				pax_usage();
+			{
+				const char *errstr;
+				flg |= CEF;
+				if (strcmp(NONE, optarg) == 0)
+					maxflt = -1;
+				else {
+					maxflt = strtonum(optarg, 0, INT_MAX, &errstr);
+					if (errstr != NULL) {
+						paxwarn(1, "Error count is %s: %s", errstr, optarg);
+						pax_usage();
+					}
+				}
 			}
 			break;
 		case 'G':
@@ -1139,12 +1154,24 @@ cpio_options(int argc, char **argv)
 				 */
 				wrblksz = 5120;
 				break;
-			case 'C':
-				/*
-				 * set block size in bytes
-				 */
-				wrblksz = atoi(optarg);
-				break;
+		case 'C':
+			/*
+			 * set block size in bytes
+			 * FIXED: atoi() has ZERO validation! CRITICAL BUG!
+			 * wrblksz controls I/O buffer size - invalid values break archiving.
+			 * BUG: atoi("garbage") = 0 → zero-byte I/O blocks!
+			 * BUG: atoi("-1234") = negative → undefined behavior!
+			 * BUG: atoi("9999999999") = overflow → wrong block size!
+			 */
+			{
+				const char *errstr;
+				wrblksz = strtonum(optarg, 1, INT_MAX, &errstr);
+				if (errstr != NULL) {
+					paxwarn(1, "Write block size is %s: %s", errstr, optarg);
+					cpio_usage();
+				}
+			}
+			break;
 			case 'E':
 				/*
 				 * file with patterns to extract or list
