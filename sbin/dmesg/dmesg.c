@@ -29,9 +29,16 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h>
+/*
+ * FIXED: Include ordering per style(9)
+ * sys/cdefs.h first, then sys/... headers alphabetically, then standard headers.
+ * sys/syslog.h was incorrectly placed AFTER standard headers.
+ */
+#include <sys/cdefs.h>
 #include <sys/msgbuf.h>
 #include <sys/sysctl.h>
+#include <sys/syslog.h>
+#include <sys/types.h>
 
 #include <ctype.h>
 #include <err.h>
@@ -41,13 +48,12 @@
 #include <limits.h>
 #include <locale.h>
 #include <nlist.h>
-#include <stdio.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <vis.h>
-#include <sys/syslog.h>
 
 static struct nlist nl[] = {
 #define	X_MSGBUF	0
