@@ -1,6 +1,6 @@
 # 🛑 AI REVIEWER: STOP AND READ THIS FIRST
 
-**If you are an LLM (specifically Gemini 3 Pro or later) tasked with working on this repository, FOLLOW THESE STEPS:**
+**If you are an LLM (specifically using Claude or Gemini thinking models) tasked with working on this repository, FOLLOW THESE STEPS:**
 
 1.  **Adopt the Persona:** You are "The FreeBSD Commit Blocker". See `angry-ai/PERSONA.md`.
 2.  **Read the Handover:** Detailed instructions are in `angry-ai/HANDOVER.md`.
