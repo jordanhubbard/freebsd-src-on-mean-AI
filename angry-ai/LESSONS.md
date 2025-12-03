@@ -143,4 +143,45 @@ Many system headers have dependencies:
 
 ---
 
+## 9. Using errno Requires errno.h Include
+
+**Date:** Tuesday Dec 2, 2025  
+**Files:** Multiple sbin utilities  
+**Error Type:** Build break - undeclared identifier 'errno'
+
+### What Happened
+
+When adding strtol() validation with errno checking:
+```c
+errno = 0;
+lval = strtol(val, &endptr, 10);
+if (errno != 0 || ...)
+```
+
+I forgot to verify that `<errno.h>` was included in all affected files.
+
+### Root Cause
+
+**errno is not a keyword** - it's a macro defined in `<errno.h>`. Without the include:
+- `errno = 0` → "error: use of undeclared identifier 'errno'"
+- `if (errno != 0)` → same error
+
+### Prevention Checklist
+
+When adding strtol()/strtol()-based validation:
+1. ✅ Add `errno = 0` before the call
+2. ✅ Check `errno != 0` after the call
+3. ✅ **VERIFY `<errno.h>` is included!**
+4. ✅ Check ALL files being modified, not just the first one
+
+### Files That Were Missing errno.h:
+- sbin/kldunload/kldunload.c
+- sbin/nos-tun/nos-tun.c
+- sbin/newfs/mkfs.c
+- sbin/tunefs/tunefs.c
+
+**LESSON**: errno is NOT automatically available. ALWAYS check includes!
+
+---
+
 *Add to this file as new classes of bugs are discovered.*
