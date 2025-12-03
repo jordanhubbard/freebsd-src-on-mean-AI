@@ -1523,8 +1523,20 @@ static void
 setifmetric(if_ctx *ctx, const char *val, int dummy __unused)
 {
 	struct ifreq ifr = {};
+	char *endptr;
+	long lval;
 
-	ifr.ifr_metric = atoi(val);
+	/*
+	 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+	 * BUG: atoi("9999999999") overflows → wrong metric!
+	 * BUG: atoi("garbage") returns 0 → wrong metric silently!
+	 * Network interface metrics affect routing - CRITICAL!
+	 */
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval < 0 || lval > INT_MAX)
+		errx(1, "invalid metric: %s", val);
+	ifr.ifr_metric = (int)lval;
 	if (ioctl_ctx_ifr(ctx, SIOCSIFMETRIC, &ifr) < 0)
 		err(1, "ioctl SIOCSIFMETRIC (set metric)");
 }
@@ -1533,8 +1545,20 @@ static void
 setifmtu(if_ctx *ctx, const char *val, int dummy __unused)
 {
 	struct ifreq ifr = {};
+	char *endptr;
+	long lval;
 
-	ifr.ifr_mtu = atoi(val);
+	/*
+	 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+	 * BUG: atoi("9999999999") overflows → WRONG MTU!
+	 * BUG: atoi("garbage") returns 0 → MTU 0 BREAKS NETWORKING!
+	 * MTU controls packet size - wrong values BREAK NETWORK CONNECTIVITY!
+	 */
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval < 0 || lval > INT_MAX)
+		errx(1, "invalid mtu: %s", val);
+	ifr.ifr_mtu = (int)lval;
 	if (ioctl_ctx_ifr(ctx, SIOCSIFMTU, &ifr) < 0)
 		err(1, "ioctl SIOCSIFMTU (set mtu)");
 }

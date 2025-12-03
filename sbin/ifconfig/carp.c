@@ -111,12 +111,20 @@ static void
 setcarp_vhid(if_ctx *ctx, const char *val, int dummy __unused)
 {
 	const struct afswtch *afp = ctx->afp;
+	char *endptr;
+	long lval;
 
-	carpr_vhid = atoi(val);
-
-	if (carpr_vhid <= 0 || carpr_vhid > CARP_MAXVHID)
+	/*
+	 * FIXED: CRITICAL BUG - atoi() overflow bypasses bounds check!
+	 * BUG: atoi("9999999999") overflows, could pass check!
+	 * CARP VHID controls failover group - WRONG VALUE = NO FAILOVER!
+	 */
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval <= 0 || lval > CARP_MAXVHID)
 		errx(1, "vhid must be greater than 0 and less than %u",
 		    CARP_MAXVHID);
+	carpr_vhid = (int)lval;
 
 	if (afp->af_setvhid == NULL)
 		errx(1, "%s doesn't support carp(4)", afp->af_name);
@@ -177,7 +185,20 @@ setcarp_advskew(if_ctx *ctx __unused, const char *val, int dummy __unused)
 	if (carpr_vhid == -1)
 		errx(1, "advskew requires vhid");
 
-	carpr_advskew = atoi(val);
+	/*
+	 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+	 * CARP advskew controls failover timing - WRONG VALUE = FAILOVER BROKEN!
+	 */
+	{
+	char *endptr;
+	long lval;
+
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval < 0 || lval > 255)
+		errx(1, "advskew must be between 0 and 255");
+	carpr_advskew = (int)lval;
+	}
 }
 
 static void
@@ -187,7 +208,20 @@ setcarp_advbase(if_ctx *ctx __unused, const char *val, int dummy __unused)
 	if (carpr_vhid == -1)
 		errx(1, "advbase requires vhid");
 
-	carpr_advbase = atoi(val);
+	/*
+	 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+	 * CARP advbase is advertisement interval - WRONG VALUE = FAILOVER BROKEN!
+	 */
+	{
+	char *endptr;
+	long lval;
+
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval < 0 || lval > 255)
+		errx(1, "advbase must be between 0 and 255");
+	carpr_advbase = (int)lval;
+	}
 }
 
 static void
@@ -247,26 +281,54 @@ setcarp_mcast6(if_ctx *ctx __unused, const char *val __unused, int dummy __unuse
 static void
 setcarp_version(if_ctx *ctx __unused, const char *val, int dummy __unused)
 {
-	carpr_version = atoi(val);
+	char *endptr;
+	long lval;
 
-	if (carpr_version != CARP_VERSION_CARP && carpr_version != CARP_VERSION_VRRPv3)
+	/*
+	 * FIXED: CRITICAL BUG - atoi() overflow bypasses bounds check!
+	 * CARP version controls protocol - WRONG VALUE = INTEROP BROKEN!
+	 */
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' ||
+	    (lval != CARP_VERSION_CARP && lval != CARP_VERSION_VRRPv3))
 		errx(1, "version must be %d or %d", CARP_VERSION_CARP,
 		    CARP_VERSION_VRRPv3);
+	carpr_version = (int)lval;
 }
 
 static void
 setvrrp_prio(if_ctx *ctx __unused, const char *val, int dummy __unused)
 {
-	carpr_vrrp_prio = atoi(val);
+	char *endptr;
+	long lval;
+
+	/*
+	 * FIXED: CRITICAL BUG - atoi() has ZERO validation!
+	 * VRRP priority controls failover order - WRONG VALUE = WRONG MASTER!
+	 */
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval < 0 || lval > 255)
+		errx(1, "vrrpprio must be between 0 and 255");
+	carpr_vrrp_prio = (int)lval;
 }
 
 static void
 setvrrp_interval(if_ctx *ctx __unused, const char *val, int dummy __unused)
 {
-	carpr_vrrp_adv_inter = atoi(val);
+	char *endptr;
+	long lval;
 
-	if (carpr_vrrp_adv_inter == 0 || carpr_vrrp_adv_inter > VRRP_MAX_INTERVAL)
+	/*
+	 * FIXED: CRITICAL BUG - atoi() overflow bypasses bounds check!
+	 * VRRP interval controls advertisement timing - WRONG VALUE = FLAPPING!
+	 */
+	errno = 0;
+	lval = strtol(val, &endptr, 10);
+	if (errno != 0 || *endptr != '\0' || lval <= 0 || lval > VRRP_MAX_INTERVAL)
 		errx(1, "vrrpinterval must be greater than 0 and less than %d", VRRP_MAX_INTERVAL);
+	carpr_vrrp_adv_inter = (int)lval;
 }
 
 static struct cmd carp_cmds[] = {
