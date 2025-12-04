@@ -13,11 +13,34 @@ cd freebsd-src-on-angry-AI/angry-ai
 # Create .venv and install Python dependencies
 make deps
 
-# Download the default model (Qwen2.5-Coder-32B-Instruct) into this directory if needed.  Note that you will also need git lfs installed in order to download this very large file!
-
+# Download the default model (Qwen2.5-Coder-32B-Instruct) if needed
+# Note: you will need git lfs installed to download this large file!
 make model
 
-# Or just do it all in one step:
+# Run the angry AI
+make run
+```
+
+### VERY IMPORTANT NOTE for GPU users
+
+If you install everything with `make deps` it will pull a CPU torch wheel. To accelerate using your GPU:
+
+```sh
+# 1) Enter the venv
+. .venv/bin/activate
+
+# 2) Remove the CPU-only torch
+pip uninstall -y torch
+
+# 3) Install a CUDA-enabled torch build
+#    Pick the cuXXX closest to your CUDA version from nvidia-smi.
+#    For a CUDA 13.0 driver, cu124 is the nearest "official" one today.
+pip install --index-url https://download.pytorch.org/whl/cu124 torch
+
+# 4) (Optional) re-install other deps if needed, but they should already be there:
+pip install transformers accelerate safetensors sentencepiece
+
+# 5) Run the angry AI
 make run
 ```
 
@@ -140,13 +163,7 @@ In that case, PyTorch will use the MPS backend by default.
   - This loop continues until the model emits `ACTION: HALT` or a `max_steps`
     limit is reached.
 
-All model replies and tool results are logged under:
-
-```text
-.freebsd-src-on-angry-AI/.angry-ai/logs/
-```
-
-(from the repo root).
+All model replies and tool results are logged under `.angry-ai/logs/` (from the repo root).
 
 ## Tuning
 

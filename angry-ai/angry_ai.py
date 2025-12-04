@@ -21,7 +21,7 @@ Typical usage (from angry-ai/ directory):
     make deps
     make run
 
-\"\"\"
+"""
 
 import argparse
 import datetime
