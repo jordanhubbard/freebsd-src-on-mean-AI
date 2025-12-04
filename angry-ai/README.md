@@ -19,40 +19,13 @@ make model
 make run
 ```
 
-### VERY IMPORTANT NOTE for GPU users
-
-If you install everything with `make deps` it will pull a CPU torch wheel.  
-To accelerate using your GPU, you need to install a CUDA-enabled PyTorch build.
-
-**Visit https://pytorch.org/get-started/locally/ to get the correct install command for your system.**
-
-For example, for CUDA 12.4:
-
-```sh
-# 1) Enter the venv
-. .venv/bin/activate
-
-# 2) Remove the CPU-only torch
-pip uninstall -y torch
-
-# 3) Install a CUDA-enabled torch build
-#    Pick the cuXXX closest to your CUDA version from nvidia-smi.
-#    For a CUDA 13.0 driver, cu124 is the nearest "official" one today.
-pip install --index-url https://download.pytorch.org/whl/cu124 torch
-
-# 4) (Optional) re-install other deps if needed, but they should already be there:
-pip install transformers accelerate safetensors sentencepiece
-
-# 5) Run the angry AI
-make run
-```
-
 By default, the script:
 
 - Treats the parent directory (`..`) as the FreeBSD repo root.
 - Uses `../AI_START_HERE.md` as the bootstrap instructions.
 - Expects the model to live in `angry-ai/Qwen2.5-Coder-32B-Instruct`.
 - Logs all model replies and tool activity under `.angry-ai/logs` in the repo.
+- **Automatically detects NVIDIA GPUs** and installs CUDA-enabled PyTorch if available.
 
 If the model directory does not exist, `make model` (or `make run`) will:
 
@@ -69,76 +42,41 @@ On FreeBSD, you may need to install `git` and `git-lfs` first, for example:
 pkg install git git-lfs
 ```
 
+### GPU Support
+
+The `make deps` command automatically detects if you have an NVIDIA GPU (via `nvidia-smi`) and installs the appropriate PyTorch build:
+
+- **NVIDIA GPU detected**: Installs CUDA-enabled PyTorch (nightly cu130 build)
+- **No NVIDIA GPU**: Installs CPU-only PyTorch
+
+No manual intervention required! Just run `make deps` and it will do the right thing.
+
 ## CPU vs GPU
 
 This works on:
 
 - **CPU-only machines:** it will be slow, but it will run.
-- **GPU-equipped machines:** if you install a CUDA-enabled PyTorch build, it can use your NVIDIA GPU (or Apple MPS on Apple Silicon).
+- **GPU-equipped machines (NVIDIA):** `make deps` automatically detects your GPU and installs CUDA-enabled PyTorch.
+- **Apple Silicon / MPS:** PyTorch will automatically use the MPS backend if available.
 
-The script prints an environment summary at startup, for example:
+The script prints an environment summary at startup showing your hardware and PyTorch configuration.
 
-```text
-=== Angry AI Environment Summary ===
-torch.__version__        = 2.9.1+cpu
-torch.cuda.is_available()= False
-nvidia-smi detected:
-  NVIDIA GB10, 580.95.05, 13.0
-Hint: You have an NVIDIA GPU. If torch.cuda.is_available() is False,
-you probably installed a CPU-only torch wheel. Consider reinstalling
-a CUDA-enabled wheel from the official PyTorch index, for example:
+### Manual PyTorch Installation (Advanced)
 
-  pip uninstall -y torch
-  pip install --index-url https://download.pytorch.org/whl/cuXXX torch
+If you need a different PyTorch build than what `make deps` installs, you can manually install it:
 
-where 'cuXXX' matches (or is close to) the CUDA version reported above.
-====================================
-```
+1. Remove the auto-installed PyTorch:
+   ```sh
+   . .venv/bin/activate
+   pip uninstall -y torch
+   ```
 
-### CPU-only: do nothing special
+2. Install your preferred build from **https://pytorch.org/get-started/locally/**
 
-If you are happy to run on CPU:
-
-```sh
-cd freebsd-src-on-angry-AI/angry-ai
-make deps
-make run
-```
-
-`make deps` will install a CPU-build of `torch` plus the other dependencies
-(`transformers`, `accelerate`, `safetensors`, `sentencepiece`).
-
-### GPU users (NVIDIA / CUDA)
-
-If you see NVIDIA GPU info and `torch.cuda.is_available() = False`, you likely have a CPU-only PyTorch wheel.  
-You can switch to a CUDA wheel by following the instructions at **https://pytorch.org/get-started/locally/**
-
-Example for CUDA 12.4:
-
-```sh
-cd freebsd-src-on-angry-AI/angry-ai
-. .venv/bin/activate
-pip uninstall -y torch
-
-# Example: CUDA 12.4
-pip install --index-url https://download.pytorch.org/whl/cu124 torch
-
-# Reinstall the remaining dependencies if necessary
-pip install transformers accelerate safetensors sentencepiece
-```
-
-Then run:
-
-```sh
-make run
-```
-
-On startup you should now see `torch.cuda.is_available() = True` and a listing of your GPU(s).
-
-### Apple Silicon / MPS
-
-If you are on macOS with Apple Silicon and a recent PyTorch build, the script will also detect and note `torch.backends.mps.is_available()`.  
-In that case, PyTorch will use the MPS backend by default.
+3. Run the script:
+   ```sh
+   make run
+   ```
 
 ## How It Works (High Level)
 

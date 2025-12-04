@@ -30,11 +30,8 @@ MAX_NEW_TOKENS ?= 512
 TEMPERATURE    ?= 0.1
 MAX_STEPS      ?= 100
 
-# Dependencies. By default this installs a CPU build of torch.
-# GPU users can later uninstall torch from the venv and reinstall
-# a CUDA-enabled wheel (see README.md).
+# Dependencies (non-torch)
 DEPS = \
-	torch \
 	transformers \
 	accelerate \
 	safetensors \
@@ -56,7 +53,15 @@ venv: $(VENV_DIR)
 deps: venv
 	@echo "==> Upgrading pip"
 	$(PIP) install --upgrade pip
-	@echo "==> Installing dependencies: $(DEPS)"
+	@echo "==> Detecting NVIDIA GPU..."
+	@if nvidia-smi --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then \
+		echo "==> NVIDIA GPU detected! Installing CUDA-enabled PyTorch (nightly cu130)"; \
+		$(PIP) install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu130; \
+	else \
+		echo "==> No NVIDIA GPU detected, installing CPU-only PyTorch"; \
+		$(PIP) install torch; \
+	fi
+	@echo "==> Installing remaining dependencies: $(DEPS)"
 	$(PIP) install $(DEPS)
 
 model:
