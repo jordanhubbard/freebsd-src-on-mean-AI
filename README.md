@@ -20,7 +20,8 @@ keep the endless beer song going!
 ADVANCED CLASS:  If you want to actually run the model on your *own machine*,
 especially if you have a GPU (anything that torch supports) then you can
 go to the angry-ai subdirectory and read the README.md file there.  This is
-open source, you don't need no IDE!
+open source, you don't need no IDE!  You will, however, need "git lfs"
+installed on your machine to download the huge model file.
 
 We now resume with our regularly scheduled README.md file:
 
