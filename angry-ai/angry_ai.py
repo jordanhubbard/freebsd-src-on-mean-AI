@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Angry FreeBSD AI
+"""
+Angry FreeBSD AI
 
 Self-directed, ReAct-style code janitor for the
 freebsd-src-on-angry-AI repository.
@@ -20,7 +21,6 @@ Typical usage (from angry-ai/ directory):
 
     make deps
     make run
-
 """
 
 import argparse
@@ -53,13 +53,11 @@ def probe_nvidia_smi() -> Optional[str]:
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            check=True,
             text=True,
-            timeout=5,
         )
-        if proc.returncode == 0:
-            out = proc.stdout.strip()
-            return out if out else None
-        return None
+        out = proc.stdout.strip()
+        return out or None
     except Exception:
         return None
 
@@ -84,7 +82,10 @@ def print_env_summary() -> None:
             file=sys.stderr,
         )
     else:
-        print("nvidia-smi not found or not working (no NVIDIA driver / GPU, or not in PATH).", file=sys.stderr)
+        print(
+            "nvidia-smi not found or not working (no NVIDIA driver / GPU, or not in PATH).",
+            file=sys.stderr,
+        )
 
     # Apple Silicon / MPS
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -126,7 +127,9 @@ class LocalLLM:
         )
 
         # Use dtype instead of torch_dtype to avoid deprecation warnings.
-        if torch.cuda.is_available() or (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+        if torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        ):
             dtype = torch.bfloat16
         else:
             dtype = torch.float32
@@ -161,9 +164,7 @@ class LocalLLM:
     @torch.no_grad()
     def chat(self, messages: List[Dict[str, str]]) -> str:
         prompt = self._format_messages(messages)
-        inputs = self.tokenizer(
-            prompt, return_tensors="pt"
-        ).to(self.model.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
 
         print("[LLM] Starting generation...", file=sys.stderr)
         sys.stderr.flush()
@@ -199,7 +200,17 @@ class ParsedAction:
 
 
 def parse_action(llm_output: str) -> ParsedAction:
-    """Parse the LLM's output for an ACTION directive."""
+    """
+    Parse the LLM's output for an ACTION directive.
+
+    Supported forms:
+
+        ACTION: READ_FILE path/to/file
+        ACTION: LIST_DIR path/to/dir
+        ACTION: APPLY_PATCH
+        <unified diff goes here>
+        ACTION: HALT
+    """
     m = ACTION_RE.search(llm_output)
     if not m:
         raise ValueError("No ACTION: line found in model output.")
@@ -245,25 +256,58 @@ def tool_list_dir(path: Path) -> str:
         return f"LIST_DIR_ERROR for {path}: {e}\n"
 
 
+def _strip_markdown_fences(patch_text: str) -> str:
+    """
+    If the model wrapped the diff in ```...``` fences, strip them.
+
+    We look for the first line starting with ``` and the last such line,
+    and keep only the content in between. If no fences, return as-is.
+    """
+    lines = patch_text.splitlines()
+    fence_indices = [i for i, line in enumerate(lines) if line.strip().startswith("```")]
+    if len(fence_indices) >= 2:
+        start = fence_indices[0] + 1
+        end = fence_indices[-1]
+        return "\n".join(lines[start:end]).strip() + "\n"
+    return patch_text
+
+
 def tool_apply_patch(patch_text: str, repo_root: Path) -> str:
+    """
+    Apply a unified diff to the repo using patch(1).
+
+    - Strips markdown fences if present.
+    - Tries patch -p1 first (for git-style diffs: a/foo, b/foo).
+    - Falls back to patch -p0 if -p1 fails.
+    """
     if not patch_text.strip():
         return "APPLY_PATCH_ERROR: empty patch text\n"
 
-    try:
-        proc = subprocess.run(
-            ["patch", "-p0", "-u", "-N"],
-            input=patch_text.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(repo_root),
-        )
-        log = proc.stdout.decode("utf-8", errors="replace")
-        if proc.returncode == 0:
-            return f"APPLY_PATCH_OK:\n```text\n{log}\n```\n"
-        else:
-            return f"APPLY_PATCH_FAILED (exit code {proc.returncode}):\n```text\n{log}\n```\n"
-    except Exception as e:
-        return f"APPLY_PATCH_ERROR: {e}\n"
+    cleaned = _strip_markdown_fences(patch_text)
+
+    attempts = []
+    for p_level in (1, 0):
+        try:
+            proc = subprocess.run(
+                ["patch", f"-p{p_level}", "-u", "-N"],
+                input=cleaned.encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(repo_root),
+            )
+            log = proc.stdout.decode("utf-8", errors="replace")
+            attempts.append((p_level, proc.returncode, log))
+            if proc.returncode == 0:
+                return f"APPLY_PATCH_OK (patch -p{p_level}):\n```text\n{log}\n```\n"
+        except Exception as e:
+            attempts.append((p_level, -1, f"Exception: {e}"))
+
+    # If we got here, all attempts failed
+    msg_lines = ["APPLY_PATCH_FAILED:"]
+    for p_level, rc, log in attempts:
+        msg_lines.append(f"--- patch -p{p_level} (rc={rc}) ---")
+        msg_lines.append(log)
+    return "```text\n" + "\n".join(msg_lines) + "\n```\n"
 
 
 # ---------------------------------------------------------------------------
@@ -289,8 +333,19 @@ def build_wrapper_system_prompt() -> str:
         "- Always use paths relative to the repository root.\n"
         "- When editing code, emit a unified diff under ACTION: APPLY_PATCH.\n"
         "- When you are completely done, emit ACTION: HALT.\n"
-        "- Every reply MUST contain exactly one ACTION line, even if you also include explanations.\n"
+        "- You may include commentary and analysis ABOVE the ACTION line, but your FINAL line\n"
+        "  in every reply MUST be exactly one ACTION line.\n"
+        "- Example of a valid reply:\n"
+        "    I will now inspect the pkill implementation for security issues.\n"
+        "    ACTION: READ_FILE bin/pkill/pkill.c\n"
+        "- Another example:\n"
+        "    I have prepared a patch to harden argument parsing.\n"
+        "    ACTION: APPLY_PATCH\n"
+        "    diff --git a/bin/pkill/pkill.c b/bin/pkill/pkill.c\n"
+        "    ... unified diff here ...\n"
         "- Keep your natural language commentary concise; focus on concrete actions.\n"
+        "- Do NOT mention tools like StrReplace/Write/git commit in this environment; all file\n"
+        "  edits happen only through ACTION: APPLY_PATCH.\n"
     )
 
 
@@ -301,6 +356,7 @@ def ensure_logs_dir(repo_root: Path) -> Path:
 
 
 def now_utc_string() -> str:
+    # Simple UTC timestamp string; timezone-naive is fine for log naming.
     return datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
 
@@ -321,7 +377,7 @@ def agent_loop(
         {
             "role": "user",
             "content": (
-                "Here is your bootstrap instruction file (AI_START_HERE.md). " 
+                "Here is your bootstrap instruction file (AI_START_HERE.md). "
                 "Read it carefully and then begin following its directions.\n\n"
                 "```markdown\n"
                 f"{bootstrap_text}\n"
@@ -354,7 +410,10 @@ def agent_loop(
             history.append(
                 {
                     "role": "user",
-                    "content": "ERROR: Your last reply was empty. You must respond with a valid ACTION line.",
+                    "content": (
+                        "ERROR: Your last reply was empty. You must respond with a valid ACTION line.\n"
+                        "Remember: your FINAL line must be exactly one ACTION: ... line."
+                    ),
                 }
             )
             continue
@@ -364,15 +423,25 @@ def agent_loop(
             parsed = parse_action(llm_output)
         except Exception as e:
             print(f"[AGENT] ACTION PARSE ERROR: {e}", file=sys.stderr)
+            # Record the analysis anyway
             history.append({"role": "assistant", "content": llm_output})
+            # Now explicitly ask for a short follow-up that ends with an ACTION line
             history.append(
                 {
                     "role": "user",
                     "content": (
-                        "ERROR: Could not find or parse an ACTION line in your last reply. "
-                        "Remember: each reply MUST include exactly one line starting with "
-                        "'ACTION:' followed by one of READ_FILE, LIST_DIR, APPLY_PATCH, HALT, "
-                        "and follow the protocol described earlier. Try again."
+                        "Your last reply contained analysis but no valid ACTION line. "
+                        "That analysis is fine and has been recorded.\n\n"
+                        "Now you MUST choose your next concrete step and reply in the following strict format:\n"
+                        "1. Optionally one very short sentence describing what you are about to do next.\n"
+                        "2. On the FINAL line, a single ACTION line, for example:\n"
+                        "   ACTION: READ_FILE bin/pkill/pkill.c\n"
+                        "   or\n"
+                        "   ACTION: APPLY_PATCH\n"
+                        "   <unified diff follows here>\n"
+                        "   or\n"
+                        "   ACTION: HALT\n\n"
+                        "Do not omit the ACTION line. Do not send another analysis-only reply.\n"
                     ),
                 }
             )
@@ -450,6 +519,7 @@ def agent_loop(
                     "content": (
                         f"ERROR: Unknown ACTION '{action}'. "
                         "Valid actions are READ_FILE, LIST_DIR, APPLY_PATCH, HALT.\n"
+                        "Respond again with a valid ACTION line as your FINAL line."
                     ),
                 }
             )
@@ -492,7 +562,6 @@ def main() -> None:
 
     repo_root = Path(args.repo).resolve()
     bootstrap_path = Path(args.bootstrap).resolve()
-    model_path = Path(args.model).resolve()
 
     if not repo_root.is_dir():
         print(f"[ERROR] Repo path is not a directory: {repo_root}", file=sys.stderr)
@@ -502,17 +571,13 @@ def main() -> None:
         print(f"[ERROR] Bootstrap file not found: {bootstrap_path}", file=sys.stderr)
         sys.exit(1)
 
-    if not model_path.is_dir():
-        print(f"[ERROR] Model path is not a directory: {model_path}", file=sys.stderr)
-        sys.exit(1)
-
     # Work *inside* the repo, just like an IDE would.
     os.chdir(repo_root)
     print(f"[INFO] Changed directory to repo root: {repo_root}", file=sys.stderr)
     sys.stderr.flush()
 
     llm = LocalLLM(
-        model_path=str(model_path),
+        model_path=args.model,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
     )
