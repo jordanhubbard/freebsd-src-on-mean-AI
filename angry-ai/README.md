@@ -1,8 +1,6 @@
 # Angry FreeBSD AI
 
-This directory contains a self-contained "angry AI" wrapper that can
-run locally against the `freebsd-src-on-angry-AI` repository using a
-local Hugging Face model (CPU-only or GPU-accelerated).
+This directory contains a self-contained "angry AI" wrapper that can run locally against the `freebsd-src-on-angry-AI` repository using a local Hugging Face model (CPU-only or GPU-accelerated).
 
 ## Quick Start
 
@@ -23,7 +21,8 @@ make run
 
 ### VERY IMPORTANT NOTE for GPU users
 
-If you install everything with `make deps` it will pull a CPU torch wheel. To accelerate using your GPU:
+If you install everything with `make deps` it will pull a CPU torch wheel.  
+To accelerate using your GPU:
 
 ```sh
 # 1) Enter the venv
@@ -71,8 +70,7 @@ pkg install git git-lfs
 This works on:
 
 - **CPU-only machines:** it will be slow, but it will run.
-- **GPU-equipped machines:** if you install a CUDA-enabled PyTorch build, it
-  can use your NVIDIA GPU (or Apple MPS on Apple Silicon).
+- **GPU-equipped machines:** if you install a CUDA-enabled PyTorch build, it can use your NVIDIA GPU (or Apple MPS on Apple Silicon).
 
 The script prints an environment summary at startup, for example:
 
@@ -108,9 +106,8 @@ make run
 
 ### GPU users (NVIDIA / CUDA)
 
-If you see `nvidia-smi` output and `torch.cuda.is_available() = False`, you
-likely have a CPU-only PyTorch wheel. You can switch to a CUDA wheel roughly
-like this (example for CUDA 12.4; adjust as needed):
+If you see `nvidia-smi` output and `torch.cuda.is_available() = False`, you likely have a CPU-only PyTorch wheel.  
+You can switch to a CUDA wheel roughly like this (example for CUDA 12.4; adjust as needed):
 
 ```sh
 cd freebsd-src-on-angry-AI/angry-ai
@@ -130,14 +127,11 @@ Then run:
 make run
 ```
 
-On startup you should now see `torch.cuda.is_available() = True` and a
-listing of your GPU(s).
+On startup you should now see `torch.cuda.is_available() = True` and a listing of your GPU(s).
 
 ### Apple Silicon / MPS
 
-If you are on macOS with Apple Silicon and a recent PyTorch build,
-the script will also detect and note `torch.backends.mps.is_available()`.
-
+If you are on macOS with Apple Silicon and a recent PyTorch build, the script will also detect and note `torch.backends.mps.is_available()`.  
 In that case, PyTorch will use the MPS backend by default.
 
 ## How It Works (High Level)
@@ -196,15 +190,13 @@ You can use any reasonably capable code model that:
 - is available as a Hugging Face Transformers checkpoint, and
 - fits in your available CPU/GPU memory.
 
-Examples (you must download these yourself, unless you rely on `make model`
-with the default Qwen2.5 32B path):
+Examples (you must download these yourself, unless you rely on `make model` with the default Qwen2.5 32B path):
 
 - `Qwen/Qwen2.5-Coder-7B-Instruct`
 - `Qwen/Qwen2.5-Coder-32B-Instruct`
 - your own fine-tuned coding model
 
-Point the `MODEL` variable at the directory where you cloned or downloaded
-the model, e.g.:
+Point the `MODEL` variable at the directory where you cloned or downloaded the model, e.g.:
 
 ```sh
 git lfs install
@@ -215,11 +207,8 @@ make run MODEL=/srv/models/Qwen2.5-Coder-7B-Instruct
 
 ## Safety and Sanity
 
-- This tool will apply patches to your working tree using `patch(1)`.
-  Run it on a branch, and use `git status` / `git diff` to inspect changes.
-- Logs are stored under `.angry-ai/logs` so you can inspect exactly what
-  the model said and what patches it attempted to apply.
-- If things go sideways, you can always reset your branch and try again
-  with different parameters or a different model.
+- This tool will apply patches to your working tree using `patch(1)`. Run it on a branch, and use `git status` / `git diff` to inspect changes.
+- Logs are stored under `.angry-ai/logs` so you can inspect exactly what the model said and what patches it attempted to apply.
+- If things go sideways, you can always reset your branch and try again with different parameters or a different model.
 
 Have fun being angry at FreeBSD with your very own local AI. :)
