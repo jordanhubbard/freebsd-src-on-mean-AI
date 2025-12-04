@@ -170,7 +170,25 @@ class LocalLLM:
     @torch.no_grad()
     def chat(self, messages: List[Dict[str, str]]) -> str:
         prompt = self._format_messages(messages)
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        
+        # Get model's maximum context length (default to 32K for Qwen2.5)
+        max_context = getattr(self.tokenizer, 'model_max_length', 32768)
+        # Reserve tokens for generation
+        max_input_tokens = max_context - self.max_new_tokens - 100  # 100 token safety buffer
+        
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_input_tokens
+        ).to(self.model.device)
+        
+        input_token_count = inputs["input_ids"].shape[1]
+        if input_token_count >= max_input_tokens - 100:
+            print(f"[LLM] WARNING: Input truncated! {input_token_count} tokens (limit: {max_input_tokens})", file=sys.stderr)
+            print("[LLM] Consider reducing context or file sizes in READ_FILE results.", file=sys.stderr)
+        else:
+            print(f"[LLM] Input tokens: {input_token_count} / {max_input_tokens}", file=sys.stderr)
 
         print("[LLM] Starting generation...", file=sys.stderr)
         sys.stderr.flush()
@@ -208,6 +226,85 @@ class ParsedAction:
     content: Optional[str] = None
 
 
+def validate_relative_path(path: str) -> None:
+    """
+    Validate that a path is safe (relative, no escapes).
+    
+    Unix-specific implementation - we know we're always on Unix (Linux/macOS).
+    
+    Raises ValueError if the path is unsafe.
+    """
+    if not path:
+        raise ValueError("Path cannot be empty")
+    
+    # Unix paths only - check for absolute path (starts with /)
+    if path.startswith('/'):
+        raise ValueError(f"Path must be relative, not absolute: {path}")
+    
+    # Check for null bytes (Unix path terminator)
+    if '\0' in path:
+        raise ValueError("Path contains null byte")
+    
+    # Normalize and check for parent directory escapes
+    # Since we're on Unix, we only need to check for ../ patterns
+    normalized = os.path.normpath(path)
+    if normalized.startswith('..') or '/..' in normalized:
+        raise ValueError(f"Path attempts to escape repo root: {path}")
+    
+    # Check for other dangerous patterns
+    if path.startswith('~'):
+        raise ValueError(f"Path cannot use home directory expansion: {path}")
+
+
+def resolve_repo_path(relative_path: str, repo_root: Path) -> Path:
+    """
+    Resolve a relative path within the repo, ensuring it stays within repo bounds.
+    
+    Unix-specific: Uses realpath to resolve symlinks (always available on Unix).
+    Handles macOS-specific /private prefix for /tmp and /var paths.
+    
+    Args:
+        relative_path: Path relative to repo root
+        repo_root: Absolute path to repository root
+        
+    Returns:
+        Resolved absolute path
+        
+    Raises:
+        ValueError if path escapes repo root
+    """
+    # On Unix, we can rely on realpath to resolve symlinks and get canonical paths
+    # Resolve both paths to handle macOS /private prefix (e.g., /var -> /private/var)
+    repo_root_resolved = repo_root.resolve()
+    target = (repo_root / relative_path).resolve()
+    
+    # Ensure the resolved path is within the resolved repo_root
+    # On Unix, this is a simple prefix check after canonicalization
+    try:
+        target.relative_to(repo_root_resolved)
+    except ValueError:
+        raise ValueError(f"Path '{relative_path}' resolves outside repo root: {target}")
+    
+    return target
+
+
+def strip_markdown_fences(text: str) -> str:
+    """
+    Strip markdown code fences from text if present.
+    Handles both ```language and ``` forms.
+    """
+    text = text.strip()
+    lines = text.split('\n')
+    
+    # Check if first/last lines are fences
+    if lines and lines[0].strip().startswith('```'):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith('```'):
+        lines = lines[:-1]
+    
+    return '\n'.join(lines)
+
+
 def parse_action(llm_output: str) -> ParsedAction:
     """
     Parse the LLM's output for an ACTION directive.
@@ -234,9 +331,12 @@ def parse_action(llm_output: str) -> ParsedAction:
         <unified diff goes here>
         ACTION: HALT
     """
-    m = ACTION_RE.search(llm_output)
-    if not m:
+    # Find ALL ACTION lines and use the LAST one (as per instructions)
+    matches = list(ACTION_RE.finditer(llm_output))
+    if not matches:
         raise ValueError("No ACTION: line found in model output.")
+    
+    m = matches[-1]  # Use the LAST ACTION line
 
     action = m.group(1).strip()
     rest = m.group(2).strip()
@@ -251,19 +351,43 @@ def parse_action(llm_output: str) -> ParsedAction:
         # Parse: ACTION: EDIT_FILE path/to/file
         #        OLD:\n<<<\nold text\n>>>\nNEW:\n<<<\nnew text\n>>>
         path = rest.strip()
+        validate_relative_path(path)
+        
         body = llm_output[m.end():].strip()
         
-        # Extract OLD block
-        old_match = re.search(r'OLD:\s*\n<<<\n(.*?)\n>>>', body, re.DOTALL)
+        # Extract OLD block - more lenient regex (allows whitespace variations)
+        # Matches: OLD: <<< or OLD:\n<<<
+        old_match = re.search(r'OLD:\s*\n?\s*<<<\s*\n(.*?)\n\s*>>>', body, re.DOTALL)
         if not old_match:
-            raise ValueError("EDIT_FILE: Could not find OLD:\n<<<\n...\n>>> block")
+            # Show what we found for debugging
+            preview = body[:300].replace('\n', '\\n')
+            raise ValueError(
+                f"EDIT_FILE: Could not find OLD:\\n<<<\\n...\\n>>> block.\n"
+                f"Expected format:\n"
+                f"  OLD:\n"
+                f"  <<<\n"
+                f"  old text here\n"
+                f"  >>>\n"
+                f"Body preview: {preview}..."
+            )
         old_str = old_match.group(1)
+        old_str = strip_markdown_fences(old_str)
         
-        # Extract NEW block
-        new_match = re.search(r'NEW:\s*\n<<<\n(.*?)\n>>>', body, re.DOTALL)
+        # Extract NEW block - more lenient regex
+        new_match = re.search(r'NEW:\s*\n?\s*<<<\s*\n(.*?)\n\s*>>>', body, re.DOTALL)
         if not new_match:
-            raise ValueError("EDIT_FILE: Could not find NEW:\n<<<\n...\n>>> block")
+            preview = body[:300].replace('\n', '\\n')
+            raise ValueError(
+                f"EDIT_FILE: Could not find NEW:\\n<<<\\n...\\n>>> block.\n"
+                f"Expected format:\n"
+                f"  NEW:\n"
+                f"  <<<\n"
+                f"  new text here\n"
+                f"  >>>\n"
+                f"Body preview: {preview}..."
+            )
         new_str = new_match.group(1)
+        new_str = strip_markdown_fences(new_str)
         
         return ParsedAction(action="EDIT_FILE", argument=path, old_str=old_str, new_str=new_str)
 
@@ -271,18 +395,35 @@ def parse_action(llm_output: str) -> ParsedAction:
         # Parse: ACTION: WRITE_FILE path/to/file
         #        CONTENT:\n<<<\nfile content\n>>>
         path = rest.strip()
+        validate_relative_path(path)
+        
         body = llm_output[m.end():].strip()
         
-        # Extract CONTENT block
-        content_match = re.search(r'CONTENT:\s*\n<<<\n(.*?)\n>>>', body, re.DOTALL)
+        # Extract CONTENT block - more lenient regex
+        content_match = re.search(r'CONTENT:\s*\n?\s*<<<\s*\n(.*?)\n\s*>>>', body, re.DOTALL)
         if not content_match:
-            raise ValueError("WRITE_FILE: Could not find CONTENT:\n<<<\n...\n>>> block")
+            preview = body[:300].replace('\n', '\\n')
+            raise ValueError(
+                f"WRITE_FILE: Could not find CONTENT:\\n<<<\\n...\\n>>> block.\n"
+                f"Expected format:\n"
+                f"  CONTENT:\n"
+                f"  <<<\n"
+                f"  file content here\n"
+                f"  >>>\n"
+                f"Body preview: {preview}..."
+            )
         content = content_match.group(1)
+        content = strip_markdown_fences(content)
         
         return ParsedAction(action="WRITE_FILE", argument=path, content=content)
 
     # All other actions: the rest of the line is the argument
     argument = rest.strip()
+    
+    # Validate paths for file/dir operations
+    if action in ("READ_FILE", "LIST_DIR") and argument:
+        validate_relative_path(argument)
+    
     return ParsedAction(action=action, argument=argument)
 
 
@@ -291,15 +432,51 @@ def parse_action(llm_output: str) -> ParsedAction:
 # ---------------------------------------------------------------------------
 
 
-def tool_read_file(path: Path) -> str:
+def tool_read_file(path: Path, max_chars: int = 50000) -> str:
+    """
+    Read a file and return its contents, truncating if necessary.
+    
+    Args:
+        path: Path to the file
+        max_chars: Maximum number of characters to return (default 50K)
+    """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
+        
+        if len(text) > max_chars:
+            lines = text.splitlines(keepends=True)
+            truncated = ""
+            char_count = 0
+            line_count = 0
+            
+            for line in lines:
+                if char_count + len(line) > max_chars:
+                    break
+                truncated += line
+                char_count += len(line)
+                line_count += 1
+            
+            total_lines = len(lines)
+            remaining_lines = total_lines - line_count
+            
+            warning = (
+                f"\n\n[... FILE TRUNCATED: showing {line_count}/{total_lines} lines "
+                f"({char_count}/{len(text)} chars) ...]\n"
+                f"[... {remaining_lines} more lines not shown ...]\n"
+            )
+            return f"READ_FILE_RESULT for {path}:\n```text\n{truncated}{warning}```\n"
+        
         return f"READ_FILE_RESULT for {path}:\n```text\n{text}\n```\n"
     except Exception as e:
         return f"READ_FILE_ERROR for {path}: {e}\n"
 
 
-def tool_list_dir(path: Path) -> str:
+def tool_list_dir(path: Path, show_ignored: bool = False) -> str:
+    """
+    List directory contents, optionally filtering out .gitignore'd files.
+    
+    Unix-specific: Uses 'git check-ignore' to filter (always available since we're in a repo).
+    """
     try:
         if not path.exists():
             return f"LIST_DIR_ERROR: Path does not exist: {path}\n"
@@ -307,7 +484,25 @@ def tool_list_dir(path: Path) -> str:
             return f"LIST_DIR_ERROR: Path is not a directory: {path}\n"
 
         items = sorted(os.listdir(path))
-        listing = "\n".join(items)
+        
+        # Filter out gitignored files by default (Unix-specific optimization)
+        if not show_ignored:
+            filtered_items = []
+            for item in items:
+                item_path = path / item
+                # Use git check-ignore to test if file should be ignored
+                # This is fast and respects .gitignore rules
+                result = subprocess.run(
+                    ["git", "check-ignore", "-q", str(item_path)],
+                    cwd=path,
+                    capture_output=True
+                )
+                # Exit code 0 means ignored, 1 means not ignored
+                if result.returncode != 0:
+                    filtered_items.append(item)
+            items = filtered_items
+        
+        listing = "\n".join(items) if items else "(empty or all files ignored)"
         return f"LIST_DIR_RESULT for {path}:\n```text\n{listing}\n```\n"
     except Exception as e:
         return f"LIST_DIR_ERROR for {path}: {e}\n"
@@ -655,6 +850,21 @@ def agent_loop(
 
         action = parsed.action
         arg = (parsed.argument or "").strip() if parsed.argument else ""
+        
+        # Debug logging for successful parse
+        debug_info = f"[AGENT] Parsed ACTION: {action}"
+        if arg:
+            debug_info += f" arg={arg}"
+        if parsed.old_str is not None:
+            debug_info += f" old_len={len(parsed.old_str)}"
+        if parsed.new_str is not None:
+            debug_info += f" new_len={len(parsed.new_str)}"
+        if parsed.content is not None:
+            debug_info += f" content_len={len(parsed.content)}"
+        if parsed.patch is not None:
+            debug_info += f" patch_len={len(parsed.patch)}"
+        print(debug_info, file=sys.stderr)
+        sys.stderr.flush()
 
         if action == "HALT":
             print("[AGENT] Received ACTION: HALT. Exiting.", file=sys.stderr)
@@ -662,15 +872,16 @@ def agent_loop(
             break
 
         elif action == "READ_FILE":
-            target = (repo_root / arg).resolve()
-            if not str(target).startswith(str(repo_root)):
-                result = f"READ_FILE_ERROR: Path escapes repo root: {arg}\n"
-            else:
+            try:
+                target = resolve_repo_path(arg, repo_root)
                 print(f"[AGENT TOOL] READ_FILE {target}", file=sys.stderr)
                 result = tool_read_file(target)
+            except ValueError as e:
+                result = f"READ_FILE_ERROR: {e}\n"
 
+            # Display full result (already truncated by tool_read_file if needed)
             print("[AGENT TOOL RESULT BEGIN]")
-            print(result[:2000])
+            print(result)
             print("[AGENT TOOL RESULT END]")
             sys.stdout.flush()
             sys.stderr.flush()
@@ -679,12 +890,12 @@ def agent_loop(
             continue
 
         elif action == "LIST_DIR":
-            target = (repo_root / arg).resolve()
-            if not str(target).startswith(str(repo_root)):
-                result = f"LIST_DIR_ERROR: Path escapes repo root: {arg}\n"
-            else:
+            try:
+                target = resolve_repo_path(arg, repo_root)
                 print(f"[AGENT TOOL] LIST_DIR {target}", file=sys.stderr)
                 result = tool_list_dir(target)
+            except ValueError as e:
+                result = f"LIST_DIR_ERROR: {e}\n"
 
             print("[AGENT TOOL RESULT BEGIN]")
             print(result)
@@ -696,14 +907,14 @@ def agent_loop(
             continue
 
         elif action == "EDIT_FILE":
-            target = (repo_root / arg).resolve()
-            if not str(target).startswith(str(repo_root)):
-                result = f"EDIT_FILE_ERROR: Path escapes repo root: {arg}\n"
-            else:
+            try:
+                target = resolve_repo_path(arg, repo_root)
                 print(f"[AGENT TOOL] EDIT_FILE {target}", file=sys.stderr)
                 print(f"[AGENT TOOL] OLD text length: {len(parsed.old_str or '')}", file=sys.stderr)
                 print(f"[AGENT TOOL] NEW text length: {len(parsed.new_str or '')}", file=sys.stderr)
                 result = tool_edit_file(target, parsed.old_str or "", parsed.new_str or "")
+            except ValueError as e:
+                result = f"EDIT_FILE_ERROR: {e}\n"
 
             print("[AGENT TOOL RESULT BEGIN]")
             print(result)
@@ -715,13 +926,13 @@ def agent_loop(
             continue
 
         elif action == "WRITE_FILE":
-            target = (repo_root / arg).resolve()
-            if not str(target).startswith(str(repo_root)):
-                result = f"WRITE_FILE_ERROR: Path escapes repo root: {arg}\n"
-            else:
+            try:
+                target = resolve_repo_path(arg, repo_root)
                 print(f"[AGENT TOOL] WRITE_FILE {target}", file=sys.stderr)
                 print(f"[AGENT TOOL] Content length: {len(parsed.content or '')}", file=sys.stderr)
                 result = tool_write_file(target, parsed.content or "")
+            except ValueError as e:
+                result = f"WRITE_FILE_ERROR: {e}\n"
 
             print("[AGENT TOOL RESULT BEGIN]")
             print(result)

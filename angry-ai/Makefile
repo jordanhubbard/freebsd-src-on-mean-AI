@@ -67,10 +67,31 @@ deps: venv
 model:
 	@if [ ! -d "$(MODEL)" ]; then \
 		echo "==> Model directory $(MODEL) not found; cloning Qwen2.5-Coder-32B-Instruct"; \
+		if ! command -v git-lfs >/dev/null 2>&1; then \
+			echo "ERROR: git-lfs is not installed. Install it first:"; \
+			echo "  macOS: brew install git-lfs"; \
+			echo "  Ubuntu/Debian: apt-get install git-lfs"; \
+			exit 1; \
+		fi; \
 		git lfs install || true; \
 		git clone https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct "$(MODEL)"; \
 	else \
-		echo "==> Model directory $(MODEL) already exists; skipping download."; \
+		echo "==> Model directory $(MODEL) already exists; checking for incomplete download..."; \
+		FIRST_MODEL="$$(find "$(MODEL)" -name 'model-*.safetensors' | head -1)"; \
+		if [ -n "$$FIRST_MODEL" ] && [ "$$(stat -f %z "$$FIRST_MODEL" 2>/dev/null || stat -c %s "$$FIRST_MODEL" 2>/dev/null)" -lt 1000 ]; then \
+			echo "ERROR: Model files appear to be Git LFS pointer files (too small)."; \
+			echo "This means the actual model weights were not downloaded."; \
+			echo ""; \
+			echo "To fix this:"; \
+			echo "  1. Install git-lfs if not already installed:"; \
+			echo "       macOS: brew install git-lfs"; \
+			echo "       Ubuntu/Debian: apt-get install git-lfs"; \
+			echo "  2. Initialize git-lfs: git lfs install"; \
+			echo "  3. Pull the actual files: cd $(MODEL) && git lfs pull"; \
+			echo ""; \
+			echo "Or simply remove $(MODEL) and run 'make model' again."; \
+			exit 1; \
+		fi; \
 	fi
 
 show-config:
