@@ -490,6 +490,7 @@ def main() -> None:
 
     repo_root = Path(args.repo).resolve()
     bootstrap_path = Path(args.bootstrap).resolve()
+    model_path = Path(args.model).resolve()
 
     if not repo_root.is_dir():
         print(f"[ERROR] Repo path is not a directory: {repo_root}", file=sys.stderr)
@@ -499,13 +500,17 @@ def main() -> None:
         print(f"[ERROR] Bootstrap file not found: {bootstrap_path}", file=sys.stderr)
         sys.exit(1)
 
+    if not model_path.is_dir():
+        print(f"[ERROR] Model path is not a directory: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
     # Work *inside* the repo, just like an IDE would.
     os.chdir(repo_root)
     print(f"[INFO] Changed directory to repo root: {repo_root}", file=sys.stderr)
     sys.stderr.flush()
 
     llm = LocalLLM(
-        model_path=args.model,
+        model_path=str(model_path),
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
     )
