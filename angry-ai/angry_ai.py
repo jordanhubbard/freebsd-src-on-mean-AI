@@ -471,13 +471,16 @@ def parse_action(llm_output: str) -> ParsedAction:
 # ---------------------------------------------------------------------------
 
 
-def tool_read_file(path: Path, max_chars: int = 50000) -> str:
+def tool_read_file(path: Path, max_chars: int = 20000) -> str:
     """
     Read a file and return its contents, truncating if necessary.
     
     Args:
         path: Path to the file
-        max_chars: Maximum number of characters to return (default 50K)
+        max_chars: Maximum number of characters to return (default 20K)
+        
+    Note: 20K chars ≈ 5K tokens, leaving room for system prompts, history,
+    and multiple files in the 32K context window.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")

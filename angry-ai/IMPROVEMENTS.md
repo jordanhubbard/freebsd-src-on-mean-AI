@@ -99,10 +99,21 @@ inputs = tokenizer(prompt, truncation=True, max_length=max_input_tokens)
 - Warns on truncation
 
 ### Problem: Large files blow up context window
-**Fix**: `READ_FILE` truncation at 50K chars (configurable)
+**Fix**: `READ_FILE` truncation at 20K chars (configurable)
+- 20K chars ≈ 5K tokens, leaves room for system prompts and history
 - Truncates on line boundaries (clean output)
 - Shows truncation info: `[... FILE TRUNCATED: showing 412/1523 lines ...]`
 - Both display AND history get truncated (was inconsistent before)
+
+**Why 20K?** With 32K token context:
+- System prompts: ~2K tokens
+- Bootstrap (AI_START_HERE.md): ~1K tokens
+- Conversation history: ~10K tokens
+- Generation output: 512 tokens
+- Safety buffer: ~5K tokens
+- **Files**: ~13K tokens remaining (≈ 2-3 files at 20K chars each)
+
+**Future improvement**: Could make this dynamic based on current context usage, but static limit is simpler and more predictable.
 
 ---
 
