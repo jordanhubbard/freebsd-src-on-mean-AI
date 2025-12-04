@@ -290,6 +290,44 @@ def tool_apply_patch(patch_text: str, repo_root: Path) -> str:
         return "APPLY_PATCH_ERROR: empty patch text\n"
 
     cleaned = _strip_markdown_fences(patch_text)
+    
+    # Validate that the patch looks like a unified diff
+    lines = cleaned.strip().splitlines()
+    if not lines:
+        return "APPLY_PATCH_ERROR: empty patch after cleaning\n"
+    
+    # Check if patch has actual content beyond just the header
+    has_hunks = any(line.startswith('@@ ') for line in lines)
+    has_changes = any(line.startswith(('+', '-')) for line in lines[1:])  # Skip first line
+    
+    if not has_hunks or not has_changes:
+        return (
+            "APPLY_PATCH_ERROR: Incomplete patch detected.\n"
+            "Your patch only contains headers but no actual changes.\n\n"
+            "A valid unified diff must include:\n"
+            "1. File headers (--- a/path/to/file and +++ b/path/to/file)\n"
+            "2. Hunk headers (@@ -start,count +start,count @@)\n"
+            "3. Context lines (unchanged, starting with space)\n"
+            "4. Removed lines (starting with -)\n"
+            "5. Added lines (starting with +)\n\n"
+            "Example of a complete unified diff:\n"
+            "```\n"
+            "--- a/bin/pkill/pkill.c\n"
+            "+++ b/bin/pkill/pkill.c\n"
+            "@@ -100,7 +100,10 @@ int main(int argc, char **argv)\n"
+            "     if (argc < 2) {\n"
+            "         usage();\n"
+            "     }\n"
+            "-    process_args(argv);\n"
+            "+    if (validate_args(argv) != 0) {\n"
+            "+        return 1;\n"
+            "+    }\n"
+            "+    process_args(argv);\n"
+            "     return 0;\n"
+            " }\n"
+            "```\n\n"
+            f"Your patch was only:\n```\n{cleaned}\n```\n"
+        )
 
     attempts = []
     for p_level in (1, 0):
@@ -337,7 +375,13 @@ def build_wrapper_system_prompt() -> str:
         "  ACTION: HALT\n\n"
         "Rules:\n"
         "- Always use paths relative to the repository root.\n"
-        "- When editing code, emit a unified diff under ACTION: APPLY_PATCH.\n"
+        "- When editing code, emit a COMPLETE unified diff under ACTION: APPLY_PATCH.\n"
+        "  The diff MUST include:\n"
+        "  * File headers: --- a/path +++ b/path\n"
+        "  * Hunk headers: @@ -line,count +line,count @@\n"
+        "  * Context lines (unchanged lines around changes)\n"
+        "  * Actual changes (lines starting with - or +)\n"
+        "- If your diff is incomplete, it will fail. Generate the ENTIRE diff in one response.\n"
         "- When you are completely done, emit ACTION: HALT.\n"
         "- You may include commentary and analysis ABOVE the ACTION line, but your FINAL line\n"
         "  in every reply MUST be exactly one ACTION line.\n"
