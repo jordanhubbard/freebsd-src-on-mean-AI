@@ -121,19 +121,14 @@ class LocalLLM:
     def __init__(
         self,
         model_path: str,
-        max_new_tokens: int = 512,
+        max_new_tokens: int = 2048,
         temperature: float = 0.1,
     ):
         print_env_summary()
-
-        # Normalize the model path so relative paths like "./model" work
-        model_dir = Path(model_path).expanduser().resolve()
-        print(f"[LLM] Loading model from {model_dir}", file=sys.stderr)
-
-        self.model_dir = model_dir
+        print(f"[LLM] Loading model from {model_path}", file=sys.stderr)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            str(model_dir),
+            model_path,
             trust_remote_code=True,
         )
 
@@ -146,7 +141,7 @@ class LocalLLM:
             dtype = torch.float32
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            str(model_dir),
+            model_path,
             dtype=dtype,
             device_map="auto",
             trust_remote_code=True,
@@ -565,7 +560,7 @@ def main() -> None:
         required=True,
         help="Path to local HF model directory.",
     )
-    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--max-steps", type=int, default=100)
 
@@ -573,6 +568,7 @@ def main() -> None:
 
     repo_root = Path(args.repo).resolve()
     bootstrap_path = Path(args.bootstrap).resolve()
+    model_path = Path(args.model).resolve()
 
     if not repo_root.is_dir():
         print(f"[ERROR] Repo path is not a directory: {repo_root}", file=sys.stderr)
@@ -582,13 +578,17 @@ def main() -> None:
         print(f"[ERROR] Bootstrap file not found: {bootstrap_path}", file=sys.stderr)
         sys.exit(1)
 
+    if not model_path.is_dir():
+        print(f"[ERROR] Model path is not a directory: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
     # Work *inside* the repo, just like an IDE would.
     os.chdir(repo_root)
     print(f"[INFO] Changed directory to repo root: {repo_root}", file=sys.stderr)
     sys.stderr.flush()
 
     llm = LocalLLM(
-        model_path=args.model,
+        model_path=str(model_path),
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
     )
