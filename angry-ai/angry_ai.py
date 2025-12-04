@@ -132,7 +132,7 @@ class LocalLLM:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             dtype=dtype,
-            device_map=\"auto\",
+            device_map="auto",
             trust_remote_code=True,
         )
 
@@ -160,7 +160,7 @@ class LocalLLM:
     def chat(self, messages: List[Dict[str, str]]) -> str:
         prompt = self._format_messages(messages)
         inputs = self.tokenizer(
-            prompt, return_tensors=\"pt\"
+            prompt, return_tensors="pt"
         ).to(self.model.device)
 
         print("[LLM] Starting generation...", file=sys.stderr)
@@ -186,7 +186,7 @@ class LocalLLM:
 # ACTION protocol
 # ---------------------------------------------------------------------------
 
-ACTION_RE = re.compile(r\"^ACTION:\\s*([A-Z_]+)(.*)$\", re.MULTILINE)
+ACTION_RE = re.compile(r"^ACTION:\s*([A-Z_]+)(.*)$", re.MULTILINE)
 
 
 @dataclass
