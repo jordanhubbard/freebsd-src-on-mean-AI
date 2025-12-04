@@ -184,4 +184,60 @@ When adding strtol()/strtol()-based validation:
 
 ---
 
+## 10. Using INT_MAX Requires limits.h Include
+
+**Date:** Thursday Dec 4, 2025  
+**File:** `sbin/comcontrol/comcontrol.c`  
+**Error Type:** Build break - undeclared identifier 'INT_MAX'
+
+### What Happened
+
+When converting atoi() to strtol() with proper range validation:
+```c
+errno = 0;
+lval = strtol(argv[3], &endptr, 10);
+if (errno != 0 || *endptr != '\0' || lval < 0 || lval > INT_MAX)
+    errx(1, "invalid drainwait value: %s", argv[3]);
+drainwait = (int)lval;
+```
+
+I forgot to add `#include <limits.h>` which defines `INT_MAX`.
+
+### Root Cause
+
+**INT_MAX is not a keyword** - it's a macro defined in `<limits.h>`. Without the include:
+- `lval > INT_MAX` → "error: use of undeclared identifier 'INT_MAX'"
+
+### The atoi() → strtol() Conversion Pattern Requires TWO Headers
+
+When replacing `atoi()` with proper `strtol()` validation, you need:
+
+1. **`<errno.h>`** - for `errno` variable (Lesson #9)
+2. **`<limits.h>`** - for `INT_MAX`, `LONG_MAX`, `UINT_MAX`, etc.
+
+### Prevention Checklist
+
+When converting atoi()/atol() to strtol() with validation:
+1. ✅ Add `errno = 0` before the call
+2. ✅ Check `errno != 0` after the call  
+3. ✅ Check `*endptr != '\0'` for trailing garbage
+4. ✅ Check range (e.g., `lval < 0 || lval > INT_MAX`)
+5. ✅ **VERIFY `<errno.h>` is included!** (Lesson #9)
+6. ✅ **VERIFY `<limits.h>` is included!** (THIS LESSON)
+
+### Common Constants from limits.h
+
+- `INT_MAX` / `INT_MIN` - for int range checks
+- `LONG_MAX` / `LONG_MIN` - for long range checks  
+- `UINT_MAX` - for unsigned int range checks
+- `UINT16_MAX` / `UINT32_MAX` - for fixed-width type checks
+- `SIZE_MAX` - for size_t range checks (from `<stdint.h>`)
+
+### Files Where This Was Needed:
+- sbin/comcontrol/comcontrol.c
+
+**LESSON**: INT_MAX and other limit constants are NOT automatically available. When adding range validation to strtol() conversions, ALWAYS verify `<limits.h>` is included!
+
+---
+
 *Add to this file as new classes of bugs are discovered.*

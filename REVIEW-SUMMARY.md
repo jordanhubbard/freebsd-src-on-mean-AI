@@ -1007,6 +1007,51 @@ Only style issues fixed. pkill requires deep audit for:
 
 ---
 
+## Phase 2: sbin/* Utilities (STARTED)
+
+### 42. sbin/comcontrol/comcontrol.c
+**Status:** HAD CRITICAL BUG - FIXED
+**Issues:**
+- **CRITICAL: atoi() with ZERO validation** - Line 95 used `atoi(argv[3])` for drainwait value with only a single-character `isdigit()` check. This has ZERO overflow protection and accepts garbage like "123garbage". **Fixed with strtol() + proper validation.**
+- **Missing header:** `<limits.h>` required for `INT_MAX` constant used in range validation. **Fixed.**
+
+**Code Analysis:**
+comcontrol is a serial port configuration utility (~127 lines):
+- Sets drain wait timeout on serial ports via TIOCSDRAINWAIT ioctl
+- Queries current drain wait via TIOCGDRAINWAIT ioctl
+- Used for controlling how long the kernel waits for serial port output to drain
+
+**THE BUG:** The original code used `atoi()` with only `isdigit(*argv[3])` validation:
+```c
+if (!isdigit(*argv[3]))  // ONLY checks FIRST character!
+    usage();
+drainwait = atoi(argv[3]);  // NO overflow checking!
+```
+
+**ATTACK SCENARIOS:**
+- `comcontrol /dev/ttyU0 drainwait 9999999999` → integer overflow, wrong value
+- `comcontrol /dev/ttyU0 drainwait 123garbage` → silently accepts garbage (isdigit only checks first char)
+- `comcontrol /dev/ttyU0 drainwait -1` → negative value, undefined ioctl behavior
+
+**FIX APPLIED:** Replaced atoi() with strtol() + comprehensive validation:
+```c
+errno = 0;
+lval = strtol(argv[3], &endptr, 10);
+if (errno != 0 || *endptr != '\0' || lval < 0 || lval > INT_MAX)
+    errx(1, "invalid drainwait value: %s", argv[3]);
+drainwait = (int)lval;
+```
+
+This validates:
+- Overflow (errno == ERANGE)
+- Trailing garbage (*endptr != '\0')
+- Negative values (lval < 0)
+- Values too large for int (lval > INT_MAX)
+
+**Issues Fixed:** 2 (1 CRITICAL atoi bug, 1 missing header)
+
+---
+
 ## 🔄 HANDOVER TO NEXT AI
 Continue with `bin/pkill/pkill.c`. This tool can kill every process on the box if it misfires. Watch for:
 - **Regex ReDoS:** `-f` and default pattern matching compile user regexes; audit for exponential backtracking, missing timeouts, and guard against attacker-controlled patterns when run as root.
