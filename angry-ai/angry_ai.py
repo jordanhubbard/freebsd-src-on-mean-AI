@@ -203,6 +203,9 @@ class ParsedAction:
     action: str
     argument: Optional[str] = None
     patch: Optional[str] = None
+    old_str: Optional[str] = None
+    new_str: Optional[str] = None
+    content: Optional[str] = None
 
 
 def parse_action(llm_output: str) -> ParsedAction:
@@ -213,6 +216,20 @@ def parse_action(llm_output: str) -> ParsedAction:
 
         ACTION: READ_FILE path/to/file
         ACTION: LIST_DIR path/to/dir
+        ACTION: EDIT_FILE path/to/file
+        OLD:
+        <<<
+        exact old text
+        >>>
+        NEW:
+        <<<
+        replacement text
+        >>>
+        ACTION: WRITE_FILE path/to/file
+        CONTENT:
+        <<<
+        file content
+        >>>
         ACTION: APPLY_PATCH
         <unified diff goes here>
         ACTION: HALT
@@ -229,6 +246,40 @@ def parse_action(llm_output: str) -> ParsedAction:
         start_idx = m.end()
         patch_body = llm_output[start_idx:].strip()
         return ParsedAction(action="APPLY_PATCH", patch=patch_body)
+
+    if action == "EDIT_FILE":
+        # Parse: ACTION: EDIT_FILE path/to/file
+        #        OLD:\n<<<\nold text\n>>>\nNEW:\n<<<\nnew text\n>>>
+        path = rest.strip()
+        body = llm_output[m.end():].strip()
+        
+        # Extract OLD block
+        old_match = re.search(r'OLD:\s*\n<<<\n(.*?)\n>>>', body, re.DOTALL)
+        if not old_match:
+            raise ValueError("EDIT_FILE: Could not find OLD:\n<<<\n...\n>>> block")
+        old_str = old_match.group(1)
+        
+        # Extract NEW block
+        new_match = re.search(r'NEW:\s*\n<<<\n(.*?)\n>>>', body, re.DOTALL)
+        if not new_match:
+            raise ValueError("EDIT_FILE: Could not find NEW:\n<<<\n...\n>>> block")
+        new_str = new_match.group(1)
+        
+        return ParsedAction(action="EDIT_FILE", argument=path, old_str=old_str, new_str=new_str)
+
+    if action == "WRITE_FILE":
+        # Parse: ACTION: WRITE_FILE path/to/file
+        #        CONTENT:\n<<<\nfile content\n>>>
+        path = rest.strip()
+        body = llm_output[m.end():].strip()
+        
+        # Extract CONTENT block
+        content_match = re.search(r'CONTENT:\s*\n<<<\n(.*?)\n>>>', body, re.DOTALL)
+        if not content_match:
+            raise ValueError("WRITE_FILE: Could not find CONTENT:\n<<<\n...\n>>> block")
+        content = content_match.group(1)
+        
+        return ParsedAction(action="WRITE_FILE", argument=path, content=content)
 
     # All other actions: the rest of the line is the argument
     argument = rest.strip()
@@ -260,6 +311,66 @@ def tool_list_dir(path: Path) -> str:
         return f"LIST_DIR_RESULT for {path}:\n```text\n{listing}\n```\n"
     except Exception as e:
         return f"LIST_DIR_ERROR for {path}: {e}\n"
+
+
+def tool_edit_file(path: Path, old_str: str, new_str: str) -> str:
+    """
+    Edit a file by finding and replacing old_str with new_str.
+    
+    This is more reliable than unified diffs for LLMs since it just requires
+    copying exact text from a previous READ_FILE result.
+    """
+    try:
+        if not path.exists():
+            return f"EDIT_FILE_ERROR: File does not exist: {path}\n"
+        if not path.is_file():
+            return f"EDIT_FILE_ERROR: Path is not a file: {path}\n"
+        
+        content = path.read_text(encoding="utf-8", errors="replace")
+        
+        # Check if old_str exists in the file
+        if old_str not in content:
+            return (
+                f"EDIT_FILE_ERROR: Could not find the OLD text in {path}\n\n"
+                "Make sure you copied the exact text from the file.\n"
+                "The OLD text must match exactly, including all whitespace.\n\n"
+                f"You provided:\n<<<\n{old_str}\n>>>\n"
+            )
+        
+        # Check if old_str appears multiple times
+        count = content.count(old_str)
+        if count > 1:
+            return (
+                f"EDIT_FILE_ERROR: The OLD text appears {count} times in {path}\n\n"
+                "The OLD text must be unique in the file.\n"
+                "Please include more surrounding context to make it unique.\n\n"
+                f"You provided:\n<<<\n{old_str}\n>>>\n"
+            )
+        
+        # Perform the replacement
+        new_content = content.replace(old_str, new_str)
+        path.write_text(new_content, encoding="utf-8")
+        
+        return f"EDIT_FILE_OK: Successfully edited {path}\n"
+    except Exception as e:
+        return f"EDIT_FILE_ERROR for {path}: {e}\n"
+
+
+def tool_write_file(path: Path, content: str) -> str:
+    """
+    Write content to a file, creating it if it doesn't exist.
+    
+    Useful for creating new files or completely rewriting small files.
+    """
+    try:
+        # Create parent directories if they don't exist
+        path.parent.mkdir(parents=True, exist_ok=True)
+        
+        path.write_text(content, encoding="utf-8")
+        
+        return f"WRITE_FILE_OK: Successfully wrote {path}\n"
+    except Exception as e:
+        return f"WRITE_FILE_ERROR for {path}: {e}\n"
 
 
 def _strip_markdown_fences(patch_text: str) -> str:
@@ -369,33 +480,68 @@ def build_wrapper_system_prompt() -> str:
         "Markdown file (AI_START_HERE.md). You MUST read and follow those instructions.\n\n"
         "When you need to interact with the repository, you MUST use one of these ACTION forms:\n\n"
         "  ACTION: READ_FILE relative/path/to/file\n"
+        "    - Reads and returns file contents\n\n"
         "  ACTION: LIST_DIR relative/path/to/dir\n"
+        "    - Lists directory contents\n\n"
+        "  ACTION: EDIT_FILE relative/path/to/file\n"
+        "  OLD:\n"
+        "  <<<\n"
+        "  exact text to find\n"
+        "  >>>\n"
+        "  NEW:\n"
+        "  <<<\n"
+        "  replacement text\n"
+        "  >>>\n"
+        "    - Edits a file by finding and replacing OLD text with NEW text\n"
+        "    - OLD text must be EXACT (copy from READ_FILE output)\n"
+        "    - OLD text must be UNIQUE in the file\n"
+        "    - Include enough context to make OLD unique\n"
+        "    - Whitespace is preserved\n\n"
+        "  ACTION: WRITE_FILE relative/path/to/file\n"
+        "  CONTENT:\n"
+        "  <<<\n"
+        "  entire file content\n"
+        "  >>>\n"
+        "    - Writes content to a file (creates if doesn't exist)\n"
+        "    - Use for new files or complete rewrites\n\n"
         "  ACTION: APPLY_PATCH\n"
         "  <unified diff follows here>\n"
-        "  ACTION: HALT\n\n"
+        "    - Legacy method: applies a unified diff\n"
+        "    - Prefer EDIT_FILE for most edits (more reliable)\n\n"
+        "  ACTION: HALT\n"
+        "    - Signals completion\n\n"
         "Rules:\n"
         "- Always use paths relative to the repository root.\n"
-        "- When editing code, emit a COMPLETE unified diff under ACTION: APPLY_PATCH.\n"
-        "  The diff MUST include:\n"
-        "  * File headers: --- a/path +++ b/path\n"
-        "  * Hunk headers: @@ -line,count +line,count @@\n"
-        "  * Context lines (unchanged lines around changes)\n"
-        "  * Actual changes (lines starting with - or +)\n"
-        "- If your diff is incomplete, it will fail. Generate the ENTIRE diff in one response.\n"
+        "- PREFER EDIT_FILE over APPLY_PATCH for code edits (simpler, more reliable).\n"
+        "- For EDIT_FILE: Copy the exact text from READ_FILE, including whitespace.\n"
+        "- For EDIT_FILE: Include enough surrounding lines to make OLD text unique.\n"
         "- When you are completely done, emit ACTION: HALT.\n"
         "- You may include commentary and analysis ABOVE the ACTION line, but your FINAL line\n"
         "  in every reply MUST be exactly one ACTION line.\n"
         "- Example of a valid reply:\n"
         "    I will now inspect the pkill implementation for security issues.\n"
         "    ACTION: READ_FILE bin/pkill/pkill.c\n"
-        "- Another example:\n"
-        "    I have prepared a patch to harden argument parsing.\n"
-        "    ACTION: APPLY_PATCH\n"
-        "    diff --git a/bin/pkill/pkill.c b/bin/pkill/pkill.c\n"
-        "    ... unified diff here ...\n"
+        "- Another example (EDIT_FILE):\n"
+        "    I will add input validation to the process_args function.\n"
+        "    ACTION: EDIT_FILE bin/pkill/pkill.c\n"
+        "    OLD:\n"
+        "    <<<\n"
+        "    int main(int argc, char **argv) {\n"
+        "        process_args(argv);\n"
+        "        return 0;\n"
+        "    }\n"
+        "    >>>\n"
+        "    NEW:\n"
+        "    <<<\n"
+        "    int main(int argc, char **argv) {\n"
+        "        if (validate_args(argv) != 0) {\n"
+        "            return 1;\n"
+        "        }\n"
+        "        process_args(argv);\n"
+        "        return 0;\n"
+        "    }\n"
+        "    >>>\n"
         "- Keep your natural language commentary concise; focus on concrete actions.\n"
-        "- Do NOT mention tools like StrReplace/Write/git commit in this environment; all file\n"
-        "  edits happen only through ACTION: APPLY_PATCH.\n"
     )
 
 
@@ -487,8 +633,15 @@ def agent_loop(
                         "2. On the FINAL line, a single ACTION line, for example:\n"
                         "   ACTION: READ_FILE bin/pkill/pkill.c\n"
                         "   or\n"
-                        "   ACTION: APPLY_PATCH\n"
-                        "   <unified diff follows here>\n"
+                        "   ACTION: EDIT_FILE bin/pkill/pkill.c\n"
+                        "   OLD:\n"
+                        "   <<<\n"
+                        "   exact old text\n"
+                        "   >>>\n"
+                        "   NEW:\n"
+                        "   <<<\n"
+                        "   replacement text\n"
+                        "   >>>\n"
                         "   or\n"
                         "   ACTION: HALT\n\n"
                         "Do not omit the ACTION line. Do not send another analysis-only reply.\n"
@@ -542,6 +695,43 @@ def agent_loop(
             history.append({"role": "user", "content": result})
             continue
 
+        elif action == "EDIT_FILE":
+            target = (repo_root / arg).resolve()
+            if not str(target).startswith(str(repo_root)):
+                result = f"EDIT_FILE_ERROR: Path escapes repo root: {arg}\n"
+            else:
+                print(f"[AGENT TOOL] EDIT_FILE {target}", file=sys.stderr)
+                print(f"[AGENT TOOL] OLD text length: {len(parsed.old_str or '')}", file=sys.stderr)
+                print(f"[AGENT TOOL] NEW text length: {len(parsed.new_str or '')}", file=sys.stderr)
+                result = tool_edit_file(target, parsed.old_str or "", parsed.new_str or "")
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "WRITE_FILE":
+            target = (repo_root / arg).resolve()
+            if not str(target).startswith(str(repo_root)):
+                result = f"WRITE_FILE_ERROR: Path escapes repo root: {arg}\n"
+            else:
+                print(f"[AGENT TOOL] WRITE_FILE {target}", file=sys.stderr)
+                print(f"[AGENT TOOL] Content length: {len(parsed.content or '')}", file=sys.stderr)
+                result = tool_write_file(target, parsed.content or "")
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
         elif action == "APPLY_PATCH":
             print("[AGENT TOOL] APPLY_PATCH invoked", file=sys.stderr)
             print("[AGENT TOOL PATCH PREVIEW BEGIN]")
@@ -568,7 +758,7 @@ def agent_loop(
                     "role": "user",
                     "content": (
                         f"ERROR: Unknown ACTION '{action}'. "
-                        "Valid actions are READ_FILE, LIST_DIR, APPLY_PATCH, HALT.\n"
+                        "Valid actions are READ_FILE, LIST_DIR, EDIT_FILE, WRITE_FILE, APPLY_PATCH, HALT.\n"
                         "Respond again with a valid ACTION line as your FINAL line."
                     ),
                 }
