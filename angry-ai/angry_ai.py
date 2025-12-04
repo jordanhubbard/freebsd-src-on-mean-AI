@@ -1274,16 +1274,105 @@ def now_utc_string() -> str:
     return datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
 
+def commit_and_push_changes(repo_root: Path, commit_msg: str, timeout: int = 300) -> tuple[bool, str]:
+    """
+    Commit all changes and push to remote.
+    
+    Returns: (success, output/error message)
+    """
+    try:
+        # Stage all changes
+        result = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        if result.returncode != 0:
+            return False, f"git add failed: {result.stderr}"
+        
+        # Commit with [AI-REVIEW] prefix
+        full_msg = f"[AI-REVIEW] {commit_msg}"
+        result = subprocess.run(
+            ["git", "commit", "-m", full_msg],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        if result.returncode != 0:
+            # Check if it's just "nothing to commit"
+            if "nothing to commit" in result.stdout.lower():
+                return True, "Nothing to commit"
+            return False, f"git commit failed: {result.stderr}"
+        
+        # Push
+        result = subprocess.run(
+            ["git", "push"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        if result.returncode != 0:
+            return False, f"git push failed: {result.stderr}"
+        
+        return True, f"Committed and pushed: {full_msg}"
+    
+    except subprocess.TimeoutExpired:
+        return False, f"git operation timed out after {timeout} seconds"
+    except Exception as e:
+        return False, f"git operation failed: {e}"
+
+
+def run_validation_command(cmd: str, timeout: int = 300) -> tuple[bool, str]:
+    """
+    Run SSH validation command.
+    
+    Returns: (success, output)
+    """
+    if not cmd or not cmd.strip():
+        return True, "Validation disabled (no command configured)"
+    
+    try:
+        print(f"[VALIDATION] Running: {cmd}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        success = result.returncode == 0
+        
+        return success, output
+    
+    except subprocess.TimeoutExpired:
+        return False, f"Validation command timed out after {timeout} seconds"
+    except Exception as e:
+        return False, f"Validation command failed: {e}"
+
+
 def agent_loop(
     repo_root: Path,
     bootstrap_path: Path,
     llm: LocalLLM,
     max_steps: int = 100,
     allowed_commands: Optional[List[str]] = None,
+    ssh_validation_cmd: str = "",
 ) -> None:
     if allowed_commands is None:
         allowed_commands = ["make", "gcc", "clang", "python", "python3", "pytest", "sh", "bash"]
     logs_dir = ensure_logs_dir(repo_root)
+    
+    # Track if we need validation after this step
+    needs_validation = False
+    last_change_description = ""
 
     # Read the repo's AI_START_HERE.md (bootstrap instructions & persona)
     bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
@@ -1439,6 +1528,11 @@ def agent_loop(
                 print(f"[AGENT TOOL] OLD text length: {len(parsed.old_str or '')}", file=sys.stderr)
                 print(f"[AGENT TOOL] NEW text length: {len(parsed.new_str or '')}", file=sys.stderr)
                 result = tool_edit_file(target, parsed.old_str or "", parsed.new_str or "")
+                
+                # Mark for validation if successful
+                if "EDIT_FILE_OK" in result:
+                    needs_validation = True
+                    last_change_description = f"Edited {arg}"
             except ValueError as e:
                 result = f"EDIT_FILE_ERROR: {e}\n"
 
@@ -1449,7 +1543,10 @@ def agent_loop(
             sys.stderr.flush()
 
             history.append({"role": "user", "content": result})
-            continue
+            
+            # Don't continue here - fall through to validation if needed
+            if not needs_validation:
+                continue
 
         elif action == "WRITE_FILE":
             try:
@@ -1457,6 +1554,11 @@ def agent_loop(
                 print(f"[AGENT TOOL] WRITE_FILE {target}", file=sys.stderr)
                 print(f"[AGENT TOOL] Content length: {len(parsed.content or '')}", file=sys.stderr)
                 result = tool_write_file(target, parsed.content or "")
+                
+                # Mark for validation if successful
+                if "WRITE_FILE_OK" in result:
+                    needs_validation = True
+                    last_change_description = f"Wrote {arg}"
             except ValueError as e:
                 result = f"WRITE_FILE_ERROR: {e}\n"
 
@@ -1467,7 +1569,10 @@ def agent_loop(
             sys.stderr.flush()
 
             history.append({"role": "user", "content": result})
-            continue
+            
+            # Don't continue here - fall through to validation if needed
+            if not needs_validation:
+                continue
 
         elif action == "GREP":
             # Format: ACTION: GREP pattern path
@@ -1758,6 +1863,73 @@ def agent_loop(
                 }
             )
             continue
+        
+        # Validation loop: after mutagenic changes (EDIT_FILE, WRITE_FILE)
+        if needs_validation and ssh_validation_cmd:
+            print(f"[AGENT] Mutagenic change detected, starting validation loop", file=sys.stderr)
+            sys.stderr.flush()
+            
+            max_validation_retries = 3
+            for retry in range(max_validation_retries):
+                # Commit and push changes
+                print(f"[AGENT] Committing and pushing changes (attempt {retry + 1}/{max_validation_retries})", file=sys.stderr)
+                commit_success, commit_msg = commit_and_push_changes(repo_root, last_change_description)
+                
+                if not commit_success:
+                    print(f"[AGENT] WARNING: {commit_msg}", file=sys.stderr)
+                    if "timed out" in commit_msg.lower():
+                        # Timeout, log and continue without validation
+                        print(f"[AGENT] Skipping validation due to commit timeout", file=sys.stderr)
+                        break
+                    # Other commit errors, try to continue
+                
+                print(f"[AGENT] {commit_msg}", file=sys.stderr)
+                sys.stderr.flush()
+                
+                # Run validation
+                validation_success, validation_output = run_validation_command(ssh_validation_cmd)
+                
+                if "timed out" in validation_output.lower():
+                    print(f"[AGENT] WARNING: Validation timed out, continuing anyway", file=sys.stderr)
+                    sys.stderr.flush()
+                    break
+                
+                if validation_success:
+                    print(f"[AGENT] ✓ Validation passed!", file=sys.stderr)
+                    sys.stderr.flush()
+                    # Tell the model about success
+                    history.append({
+                        "role": "user",
+                        "content": f"VALIDATION_SUCCESS: Changes committed and validated successfully.\n{validation_output[:1000]}"
+                    })
+                    break
+                else:
+                    print(f"[AGENT] ✗ Validation failed (attempt {retry + 1}/{max_validation_retries})", file=sys.stderr)
+                    sys.stderr.flush()
+                    
+                    # Feed errors back to model for fixing
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            f"VALIDATION_FAILED: The changes you made caused build/test errors.\n\n"
+                            f"Please analyze the errors below and fix them:\n\n"
+                            f"```\n{validation_output[:5000]}\n```\n\n"
+                            f"Respond with an ACTION to fix the issues."
+                        )
+                    })
+                    
+                    if retry < max_validation_retries - 1:
+                        # Let the model try to fix it
+                        print(f"[AGENT] Asking model to fix validation errors...", file=sys.stderr)
+                        sys.stderr.flush()
+                        break  # Exit validation loop, let model respond
+                    else:
+                        print(f"[AGENT] Max validation retries reached, continuing anyway", file=sys.stderr)
+                        sys.stderr.flush()
+            
+            # Reset validation flag
+            needs_validation = False
+            last_change_description = ""
 
     else:
         print(f"[AGENT] Reached max_steps={max_steps} without HALT. Stopping.", file=sys.stderr)
@@ -1797,6 +1969,11 @@ def main() -> None:
         default=["make", "gcc", "clang", "python", "python3", "pytest", "sh", "bash"],
         help="Whitelist of commands allowed for RUN_COMMAND action",
     )
+    parser.add_argument(
+        "--ssh-validation-cmd",
+        default="",
+        help="SSH command to run after mutagenic changes for validation (empty = disabled)",
+    )
 
     args = parser.parse_args()
 
@@ -1833,6 +2010,7 @@ def main() -> None:
         llm=llm,
         max_steps=args.max_steps,
         allowed_commands=args.allowed_commands,
+        ssh_validation_cmd=args.ssh_validation_cmd,
     )
 
 

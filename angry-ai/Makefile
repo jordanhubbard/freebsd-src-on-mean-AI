@@ -30,6 +30,10 @@ MAX_NEW_TOKENS ?= 512
 TEMPERATURE    ?= 0.1
 MAX_STEPS      ?= 100
 
+# SSH validation command - runs after each mutagenic change to verify builds
+# Empty string disables validation. Timeout is 5 minutes.
+SSH_VALIDATION_CMD ?= ssh freebsd.local "cd Src/freebsd-src-on-angry-AI && git pull && make buildworld"
+
 # Dependencies (non-torch)
 DEPS = \
 	transformers \
@@ -104,6 +108,11 @@ show-config:
 	@echo "  Tokens     = $(MAX_NEW_TOKENS)"
 	@echo "  Temp       = $(TEMPERATURE)"
 	@echo "  Max steps  = $(MAX_STEPS)"
+	@if [ -n "$(SSH_VALIDATION_CMD)" ]; then \
+		echo "  Validation = $(SSH_VALIDATION_CMD)"; \
+	else \
+		echo "  Validation = (disabled)"; \
+	fi
 	@echo "=================================================="
 
 run: deps model show-config
@@ -114,7 +123,8 @@ run: deps model show-config
 		--model "$(MODEL)" \
 		--max-new-tokens $(MAX_NEW_TOKENS) \
 		--temperature $(TEMPERATURE) \
-		--max-steps $(MAX_STEPS)
+		--max-steps $(MAX_STEPS) \
+		--ssh-validation-cmd "$(SSH_VALIDATION_CMD)"
 
 # ----------------------------------------------------------------------
 # Utility / Cleanup

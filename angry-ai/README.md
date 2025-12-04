@@ -103,6 +103,99 @@ If you need a different PyTorch build than what `make deps` installs, you can ma
 
 All model replies and tool results are logged under `.angry-ai/logs/` (from the repo root).
 
+## SSH Validation (Self-Healing Loop)
+
+The Angry AI includes an optional **automatic validation loop** that commits, pushes, and validates changes after every mutagenic operation (file edits/writes). When validation fails, the AI automatically receives the build errors and attempts to fix them.
+
+### How It Works
+
+1. **AI makes a change** (EDIT_FILE or WRITE_FILE)
+2. **Automatic commit and push**: `git commit -m "[AI-REVIEW] <description>" && git push`
+3. **Remote validation**: SSH command runs (e.g., `make buildworld` on FreeBSD host)
+4. **Success**: AI continues to next task
+5. **Failure**: Build errors are fed back to AI for self-healing (max 3 attempts)
+
+### Configuration
+
+Set the `SSH_VALIDATION_CMD` variable in the Makefile or via command line:
+
+```makefile
+# Default (can be customized)
+SSH_VALIDATION_CMD ?= ssh freebsd.local "cd Src/freebsd-src-on-angry-AI && git pull && make buildworld"
+```
+
+To disable validation:
+```sh
+make run SSH_VALIDATION_CMD=""
+```
+
+To customize:
+```sh
+make run SSH_VALIDATION_CMD="ssh myhost 'cd /path && make test'"
+```
+
+### Prerequisites
+
+**Important**: SSH validation requires proper setup to work unattended:
+
+1. **SSH Key Authentication**: Configure passwordless SSH to your build host
+   ```sh
+   # On your local machine (where angry-ai runs)
+   ssh-keygen -t ed25519 -C "angry-ai"
+   ssh-copy-id freebsd.local
+   
+   # Test it works without password prompt
+   ssh freebsd.local "echo success"
+   ```
+
+2. **Git Authentication**: Configure git push without password prompts
+   ```sh
+   # Option 1: SSH-based git (recommended)
+   git remote set-url origin git@github.com:user/repo.git
+   
+   # Option 2: HTTPS with credential helper
+   git config credential.helper store
+   git push  # Enter credentials once, they'll be cached
+   ```
+
+3. **Remote Repository Access**: The build host must have access to pull from the repository
+   ```sh
+   # On the build host (freebsd.local)
+   cd Src/freebsd-src-on-angry-AI
+   git pull  # Should work without prompts
+   ```
+
+**Without these prerequisites**, the validation loop will timeout after 5 minutes and log warnings, but the AI will continue working without validation.
+
+### Benefits
+
+- **Quality Assurance**: Every change is validated before proceeding
+- **Self-Healing**: AI automatically fixes compilation errors
+- **Audit Trail**: All changes committed with `[AI-REVIEW]` prefix
+- **Non-Blocking**: 5-minute timeouts prevent infinite waits
+
+### Example Workflow
+
+```
+[AGENT] Step 42 - querying LLM...
+[AGENT] Parsed ACTION: EDIT_FILE arg=sys/kern/vfs_syscalls.c
+[AGENT TOOL] EDIT_FILE /path/sys/kern/vfs_syscalls.c
+[AGENT] Mutagenic change detected, starting validation loop
+[AGENT] Committing and pushing changes (attempt 1/3)
+[AGENT] Committed and pushed: [AI-REVIEW] Edited sys/kern/vfs_syscalls.c
+[VALIDATION] Running: ssh freebsd.local "cd ... && make buildworld"
+[AGENT] ✓ Validation passed!
+```
+
+Or if it fails:
+```
+[AGENT] ✗ Validation failed (attempt 1/3)
+[AGENT] Asking model to fix validation errors...
+<AI receives error log and makes a fix>
+```
+
+See `VALIDATION_FEATURE.md` for detailed documentation.
+
 ## Tuning
 
 In the `Makefile` you can adjust the defaults:
