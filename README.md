@@ -5,8 +5,8 @@ the work of the humans that came before them.
 It is purely an experiment to see what happens when AIs are allowed to
 brutally review an existing large code base.
 
-To start the analysis where the previous AI has left off, start your
-favorite model at the base of this tree and use the following prompt:
+To start the analysis where the previous AI has left off, start up your
+favorite AI IDE at the base of this tree and use the following prompt:
 
 Look at `AI_START_HERE.md` and get to work.
 
@@ -16,6 +16,11 @@ chunk of work in this code base using the existing TODO guidelines and record
 its work in the same style and "rolling todo list" format.  Just git commit
 your work and hand it off to the next AI-augmented code sadist and we can
 keep the endless beer song going!
+
+ADVANCED CLASS:  If you want to actually run the model on your *own machine*,
+especially if you have a GPU (anything that torch supports) then you can
+go to the angry-ai subdirectory and read the README.md file there.  This is
+open source, you don't need no IDE!
 
 We now resume with our regularly scheduled README.md file:
 
