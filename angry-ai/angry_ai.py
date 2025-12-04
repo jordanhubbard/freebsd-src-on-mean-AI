@@ -43,21 +43,25 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def probe_nvidia_smi() -> Optional[str]:
-    """Return nvidia-smi summary string if available and working, else None."""
+    """
+    Return a short nvidia-smi output if available and working, else None.
+
+    We intentionally do *not* use --query-* flags here, to maximize
+    compatibility across different nvidia-smi versions.
+    """
     try:
         proc = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name,driver_version,cuda_version",
-                "--format=csv,noheader",
-            ],
+            ["nvidia-smi"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=True,
             text=True,
         )
+        if proc.returncode != 0:
+            return None
         out = proc.stdout.strip()
         return out or None
+    except FileNotFoundError:
+        return None
     except Exception:
         return None
 
@@ -69,11 +73,12 @@ def print_env_summary() -> None:
 
     nvidia_info = probe_nvidia_smi()
     if nvidia_info:
-        print("nvidia-smi detected:", file=sys.stderr)
-        for line in nvidia_info.splitlines():
+        print("nvidia-smi detected (first lines):", file=sys.stderr)
+        # Print only the first few lines so we don't spam too hard.
+        for line in nvidia_info.splitlines()[:5]:
             print(f"  {line}", file=sys.stderr)
         print(
-            "Hint: You have an NVIDIA GPU. If torch.cuda.is_available() is False,\n"
+            "Hint: If torch.cuda.is_available() is False but nvidia-smi works,\n"
             "you probably installed a CPU-only torch wheel. Consider reinstalling\n"
             "a CUDA-enabled wheel from the official PyTorch index, for example:\n\n"
             "  pip uninstall -y torch\n"
@@ -120,10 +125,16 @@ class LocalLLM:
         temperature: float = 0.1,
     ):
         print_env_summary()
-        print(f"[LLM] Loading model from {model_path}", file=sys.stderr)
+
+        # Normalize the model path so relative paths like "./model" work
+        model_dir = Path(model_path).expanduser().resolve()
+        print(f"[LLM] Loading model from {model_dir}", file=sys.stderr)
+
+        self.model_dir = model_dir
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path, trust_remote_code=True
+            str(model_dir),
+            trust_remote_code=True,
         )
 
         # Use dtype instead of torch_dtype to avoid deprecation warnings.
@@ -135,7 +146,7 @@ class LocalLLM:
             dtype = torch.float32
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_path,
+            str(model_dir),
             dtype=dtype,
             device_map="auto",
             trust_remote_code=True,
