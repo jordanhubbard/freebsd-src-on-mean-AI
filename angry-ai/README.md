@@ -13,7 +13,8 @@ cd freebsd-src-on-angry-AI/angry-ai
 # Create .venv and install Python dependencies
 make deps
 
-# Download the default model (Qwen2.5-Coder-32B-Instruct) into this directory if needed
+# Download the default model (Qwen2.5-Coder-32B-Instruct) into this directory if needed.  Note that you will also need git lfs installed in order to download this very large file!
+
 make model
 
 # Or just do it all in one step:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-\"\"\"Angry FreeBSD AI
+"""Angry FreeBSD AI
 
 Self-directed, ReAct-style code janitor for the
 freebsd-src-on-angry-AI repository.

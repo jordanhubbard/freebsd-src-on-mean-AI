@@ -46,7 +46,9 @@
 #include <err.h>
 #include <fcntl.h>
 #include <langinfo.h>
+#include <limits.h>
 #include <locale.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,10 +62,15 @@ static	void usage(void) __dead2;
 static	void cleanup(void);
 static	u_int16_t parse_element_type(char *);
 static	u_int16_t parse_element_unit(char *);
+static	u_int16_t parse_u16_arg(const char *, const char *);
+static	u_int32_t parse_u32_arg(const char *, const char *);
 static	const char * element_type_name(int et);
 static	int parse_special(char *);
 static	int is_special(char *);
 static	const char *bits_to_string(ces_status_flags, const char *);
+static	void checked_printf(const char *, ...) __printflike(1, 2);
+static	void checked_fprintf(FILE *, const char *, ...) __printflike(2, 3);
+static	void checked_putchar(int);
 
 static	void find_element(char *, uint16_t *, uint16_t *);
 static	struct changer_element_status *get_element_status
@@ -247,7 +254,7 @@ do_move(const char *cname, int argc, char **argv)
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s "
+	checked_fprintf(stderr, "usage: %s %s "
 	    "<from ET> <from EU> <to ET> <to EU> [inv]\n", getprogname(), cname);
 	return (1);
 }
@@ -354,7 +361,7 @@ do_exchange(const char *cname, int argc, char **argv)
 	return (0);
 
  usage:
-	(void) fprintf(stderr,
+	checked_fprintf(stderr,
 	    "usage: %s %s <src ET> <src EU> <dst1 ET> <dst1 EU>\n"
 	    "       [<dst2 ET> <dst2 EU>] [inv1] [inv2]\n",
 	    getprogname(), cname);
@@ -416,7 +423,7 @@ do_position(const char *cname, int argc, char **argv)
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s <to ET> <to EU> [inv]\n",
+	checked_fprintf(stderr, "usage: %s %s <to ET> <to EU> [inv]\n",
 	    getprogname(), cname);
 	return (1);
 }
@@ -442,25 +449,25 @@ do_params(const char *cname, int argc, char **argv __unused)
 	if (ioctl(changer_fd, CHIOGPARAMS, &data))
 		err(1, "%s: CHIOGPARAMS", changer_name);
 
-	(void) printf("%s: %d slot%s, %d drive%s, %d picker%s",
+	checked_printf("%s: %d slot%s, %d drive%s, %d picker%s",
 	    changer_name,
 	    data.cp_nslots, (data.cp_nslots > 1) ? "s" : "",
 	    data.cp_ndrives, (data.cp_ndrives > 1) ? "s" : "",
 	    data.cp_npickers, (data.cp_npickers > 1) ? "s" : "");
 	if (data.cp_nportals)
-		(void) printf(", %d portal%s", data.cp_nportals,
+		checked_printf(", %d portal%s", data.cp_nportals,
 		    (data.cp_nportals > 1) ? "s" : "");
 
 	/* Get current picker from changer and display it. */
 	if (ioctl(changer_fd, CHIOGPICKER, &picker))
 		err(1, "%s: CHIOGPICKER", changer_name);
 
-	(void) printf("\n%s: current picker: %d\n", changer_name, picker);
+	checked_printf("\n%s: current picker: %d\n", changer_name, picker);
 
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s\n", getprogname(), cname);
+	checked_fprintf(stderr, "usage: %s %s\n", getprogname(), cname);
 	return (1);
 }
 
@@ -483,12 +490,12 @@ do_getpicker(const char *cname, int argc, char **argv __unused)
 	if (ioctl(changer_fd, CHIOGPICKER, &picker))
 		err(1, "%s: CHIOGPICKER", changer_name);
 
-	(void) printf("%s: current picker: %d\n", changer_name, picker);
+	checked_printf("%s: current picker: %d\n", changer_name, picker);
 
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s\n", getprogname(), cname);
+	checked_fprintf(stderr, "usage: %s %s\n", getprogname(), cname);
 	return (1);
 }
 
@@ -516,7 +523,7 @@ do_setpicker(const char *cname, int argc, char **argv)
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s <picker>\n", getprogname(), cname);
+	checked_fprintf(stderr, "usage: %s %s <picker>\n", getprogname(), cname);
 	return (1);
 }
 
@@ -603,11 +610,21 @@ do_status(const char *cname, int argc, char **argv)
 		echet = CHET_DT;
 	}
 	if (argc > 1) {
-		base = (u_int16_t)atol(argv[1]);
+		base = parse_u16_arg("start address", argv[1]);
 		count = 1;
 	}
-	if (argc > 2)
-		count = (u_int16_t)atol(argv[2]) - base + 1;
+	if (argc > 2) {
+		u_int16_t end;
+		uint32_t requested;
+
+		end = parse_u16_arg("end address", argv[2]);
+		if (end < base)
+			errx(1, "%s: end address precedes start address", cname);
+		requested = (uint32_t)end - base + 1;
+		if (requested > UINT16_MAX)
+			errx(1, "%s: element range too large", cname);
+		count = (u_int16_t)requested;
+	}
 
 	for (chet = schet; chet <= echet; ++chet) {
 		switch (chet) {
@@ -653,7 +670,7 @@ do_status(const char *cname, int argc, char **argv)
 			if (argc == 0)
 				continue;
 			else {
-				printf("%s: no %s elements\n",
+				checked_printf("%s: no %s elements\n",
 				    changer_name, description);
 				return (0);
 			}
@@ -683,50 +700,49 @@ do_status(const char *cname, int argc, char **argv)
 		for (i = 0; i < count; ++i) {
 			struct changer_element_status *ces =
 			         &(cesr.cesr_element_status[i]);
-			printf("%s %d: %s", description, ces->ces_addr,
-			    bits_to_string(ces->ces_flags,
-					   CESTATUS_BITS));
+			checked_printf("%s %d: %s", description, ces->ces_addr,
+			    bits_to_string(ces->ces_flags, CESTATUS_BITS));
 			if (sense)
-				printf(" sense: <0x%02x/0x%02x>",
-				       ces->ces_sensecode, 
-				       ces->ces_sensequal);
+				checked_printf(" sense: <0x%02x/0x%02x>",
+				    ces->ces_sensecode, ces->ces_sensequal);
 			if (pvoltag)
-				printf(" voltag: <%s:%d>", 
-				       ces->ces_pvoltag.cv_volid,
-				       ces->ces_pvoltag.cv_serial);
+				checked_printf(" voltag: <%s:%d>",
+				    ces->ces_pvoltag.cv_volid,
+				    ces->ces_pvoltag.cv_serial);
 			if (avoltag)
-				printf(" avoltag: <%s:%d>", 
-				       ces->ces_avoltag.cv_volid,
-				       ces->ces_avoltag.cv_serial);
+				checked_printf(" avoltag: <%s:%d>",
+				    ces->ces_avoltag.cv_volid,
+				    ces->ces_avoltag.cv_serial);
 			if (source) {
 				if (ces->ces_flags & CES_SOURCE_VALID)
-					printf(" source: <%s %d>", 
-					       element_type_name(
-						       ces->ces_source_type),
-					       ces->ces_source_addr);
+					checked_printf(" source: <%s %d>",
+					    element_type_name(
+					    ces->ces_source_type),
+					    ces->ces_source_addr);
 				else
-					printf(" source: <>");
+					checked_printf(" source: <>");
 			}
 			if (intaddr)
-				printf(" intaddr: <%d>", ces->ces_int_addr);
+				checked_printf(" intaddr: <%d>",
+				    ces->ces_int_addr);
 			if (scsi) {
-				printf(" scsi: <");
+				checked_printf(" scsi: <");
 				if (ces->ces_flags & CES_SCSIID_VALID)
-					printf("%d", ces->ces_scsi_id);
+					checked_printf("%d", ces->ces_scsi_id);
 				else
-					putchar('?');
-				putchar(':');
+					checked_putchar('?');
+				checked_putchar(':');
 				if (ces->ces_flags & CES_LUN_VALID)
-					printf("%d", ces->ces_scsi_lun);
+					checked_printf("%d", ces->ces_scsi_lun);
 				else
-					putchar('?');
-				putchar('>');
+					checked_putchar('?');
+				checked_putchar('>');
 			}
 			if (ces->ces_designator_length > 0)
 				print_designator(ces->ces_designator,
 						 ces->ces_code_set,
 						 ces->ces_designator_length);
-			putchar('\n');
+			checked_putchar('\n');
 		}
 
 		free(cesr.cesr_element_status);
@@ -736,7 +752,7 @@ do_status(const char *cname, int argc, char **argv)
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s [-vVsSbaA] [<element type> [<start-addr> [<end-addr>] ] ]\n",
+	checked_fprintf(stderr, "usage: %s %s [-vVsSbaA] [<element type> [<start-addr> [<end-addr>] ] ]\n",
 		       getprogname(), cname);
 	return (1);
 }
@@ -744,10 +760,10 @@ do_status(const char *cname, int argc, char **argv)
 static int
 do_ielem(const char *cname, int argc, char **argv)
 {
-	int timeout = 0;
+	u_int32_t timeout = 0;
 
 	if (argc == 2) {
-		timeout = atol(argv[1]);
+		timeout = parse_u32_arg("timeout", argv[1]);
 	} else if (argc > 1) {
 		warnx("%s: too many arguments", cname);
 		goto usage;
@@ -759,7 +775,7 @@ do_ielem(const char *cname, int argc, char **argv)
 	return (0);
 
  usage:
-	(void) fprintf(stderr, "usage: %s %s [<timeout>]\n",
+	checked_fprintf(stderr, "usage: %s %s [<timeout>]\n",
 		       getprogname(), cname);
 	return (1);
 }
@@ -802,7 +818,7 @@ do_voltag(const char *cname, int argc, char **argv)
 	}
 
 	csvr.csvr_type = parse_element_type(argv[0]);
-	csvr.csvr_addr = (u_int16_t)atol(argv[1]);
+	csvr.csvr_addr = parse_u16_arg("element address", argv[1]);
 
 	if (!clear) {
 		if (argc < 3 || argc > 4) {
@@ -815,7 +831,7 @@ do_voltag(const char *cname, int argc, char **argv)
 		else
 			csvr.csvr_flags = CSVR_MODE_SET;
 
-		if (strlen(argv[2]) > sizeof(csvr.csvr_voltag.cv_volid)) {
+		if (strlen(argv[2]) >= sizeof(csvr.csvr_voltag.cv_volid)) {
 			warnx("%s: volume label too long", cname);
 			goto usage;
 		}
@@ -824,7 +840,8 @@ do_voltag(const char *cname, int argc, char **argv)
 		       sizeof(csvr.csvr_voltag.cv_volid));
 
 		if (argc == 4) {
-			csvr.csvr_voltag.cv_serial = (u_int16_t)atol(argv[3]);
+			csvr.csvr_voltag.cv_serial =
+			    parse_u16_arg("serial number", argv[3]);
 		}
 	} else {
 		if (argc != 2) {
@@ -843,7 +860,7 @@ do_voltag(const char *cname, int argc, char **argv)
 
 	return 0;
  usage:
-	(void) fprintf(stderr, 
+	checked_fprintf(stderr, 
 		       "usage: %s %s [-fca] <element> [<voltag> [<vsn>] ]\n",
 		       getprogname(), cname);
 	return 1;
@@ -877,14 +894,33 @@ element_type_name(int et)
 static u_int16_t
 parse_element_unit(char *cp)
 {
-	int i;
-	char *p;
+	return (parse_u16_arg("unit number", cp));
+}
 
-	i = (int)strtol(cp, &p, 10);
-	if ((i < 0) || (*p != '\0'))
-		errx(1, "invalid unit number `%s'", cp);
+static u_int16_t
+parse_u16_arg(const char *what, const char *value)
+{
+	const char *errstr;
+	long long v;
 
-	return ((u_int16_t)i);
+	v = strtonum(value, 0, (long long)UINT16_MAX, &errstr);
+	if (errstr != NULL)
+		errx(1, "%s: %s value `%s'", what, errstr, value);
+
+	return ((u_int16_t)v);
+}
+
+static u_int32_t
+parse_u32_arg(const char *what, const char *value)
+{
+	const char *errstr;
+	long long v;
+
+	v = strtonum(value, 0, (long long)UINT32_MAX, &errstr);
+	if (errstr != NULL)
+		errx(1, "%s: %s value `%s'", what, errstr, value);
+
+	return ((u_int32_t)v);
 }
 
 static int
@@ -936,6 +972,39 @@ bits_to_string(ces_status_flags v, const char *cp)
 		*bp = '>';
 
 	return (buf);
+}
+
+static void
+checked_printf(const char *fmt, ...)
+{
+	va_list ap;
+	int rv;
+
+	va_start(ap, fmt);
+	rv = vprintf(fmt, ap);
+	va_end(ap);
+	if (rv < 0)
+		err(1, "printf");
+}
+
+static void
+checked_fprintf(FILE *stream, const char *fmt, ...)
+{
+	va_list ap;
+	int rv;
+
+	va_start(ap, fmt);
+	rv = vfprintf(stream, fmt, ap);
+	va_end(ap);
+	if (rv < 0)
+		err(1, "fprintf");
+}
+
+static void
+checked_putchar(int ch)
+{
+	if (putchar(ch) == EOF)
+		err(1, "putchar");
 }
 /*
  * do_return()
@@ -995,7 +1064,7 @@ do_return(const char *cname, int argc, char **argv)
 	return(0);
 
 usage:
-	(void) fprintf(stderr, "usage: %s %s "
+	checked_fprintf(stderr, "usage: %s %s "
 	    "<from ET> <from EU>\n", getprogname(), cname);
 	return(1);
 }
@@ -1176,7 +1245,7 @@ cleanup(void)
 static void
 usage(void)
 {
-	(void)fprintf(stderr, "usage: %s [-f changer] command [-<flags>] "
+	checked_fprintf(stderr, "usage: %s [-f changer] command [-<flags>] "
 		"arg1 arg2 [arg3 [...]]\n", getprogname());
 	exit(1);
 }
@@ -1187,13 +1256,13 @@ static void
 print_designator(const char *designator, u_int8_t code_set,
     u_int8_t designator_length)
 {
-	printf(" serial number: <");
+	checked_printf(" serial number: <");
 	switch (code_set) {
 	case CES_CODE_SET_ASCII: {
 		/*
 		 * The driver insures that the string is always NUL terminated.
 		 */
-		printf("%s", designator);
+		checked_printf("%s", designator);
 		break;
 	}
 	case CES_CODE_SET_UTF_8: {
@@ -1208,7 +1277,7 @@ print_designator(const char *designator, u_int8_t code_set,
 
 		if (cs_native == NULL) {
 			/* We can natively print UTF-8, so use printf. */
-			printf("%s", designator);
+			checked_printf("%s", designator);
 		} else {
 			int i;
 
@@ -1222,9 +1291,9 @@ print_designator(const char *designator, u_int8_t code_set,
 			for (i = 0; i < designator_length &&
 			    designator[i] != '\0'; i++) {
 				if ((unsigned char)designator[i] < 0x80)
-					printf("%c", designator[i]);
+					checked_printf("%c", designator[i]);
 				else
-					printf("%%%02x",
+					checked_printf("%%%02x",
 					    (unsigned char)designator[i]);
 			}
 		}
@@ -1234,12 +1303,12 @@ print_designator(const char *designator, u_int8_t code_set,
 		int i;
 
 		for (i = 0; i < designator_length; i++)
-			printf("%02X%s", designator[i],
+			checked_printf("%02X%s", designator[i],
 			    (i == designator_length - 1) ? "" : " ");
 		break;
 	}
 	default:
 		break;
 	}
-	printf(">");
+	checked_printf(">");
 }

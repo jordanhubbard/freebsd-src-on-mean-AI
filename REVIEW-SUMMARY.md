@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-### 🔥 MAJOR BREAKTHROUGH: 44 CRITICAL BUGS FIXED! 🔥
+### 🔥 MAJOR BREAKTHROUGH: 46 CRITICAL BUGS FIXED! 🔥
 
 ### Review Statistics
 
@@ -59,7 +59,7 @@
 
 ### Severity Breakdown
 
-- **CRITICAL Security/Correctness Issues:** 44 (UPDATED)
+- **CRITICAL Security/Correctness Issues:** 46 (UPDATED)
   - Unchecked fdopen() NULL return in cat (crash vulnerability)
   - Uninitialized struct flock in cat (kernel data leak)
   - st_blksize untrusted in cat (DoS via memory exhaustion) **FIXED**
@@ -76,6 +76,7 @@
   - **Unchecked sysconf() in cp/utils.c (could return -1, used in comparison) FIXED**
   - **vfork() error handling in mv.c line 382 (parent executes child code on error, terminates mv) FIXED**
   - **vfork() error handling in mv.c line 409 (parent executes child code on error, terminates mv) FIXED**
+  - **Tape changer command parsing in chio.c accepted overflowed addresses/timeouts and silently truncated voltags, letting operators move the wrong media or hammer hardware with bogus ranges. All user-supplied indices now use strtonum() with strict bounds.**
   
 - **style(9) Violations:** 47+
   - Include ordering, whitespace, lying comments, indentation, function prototypes, switch spacing, missing sys/cdefs.h, exit spacing, while spacing, inconsistent return style, extra spaces before closing parens, missing space after macro
@@ -852,31 +853,22 @@ Only style issues fixed. setfacl requires deep audit for:
 **Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
 
 ### 40. bin/chio/chio.c
-**Status:** STYLE FIXES ONLY - REQUIRES DEEP SCSI/HARDWARE AUDIT
-**Issues:**
-- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
-- **Style:** System headers not alphabetically ordered. **Fixed.**
+**Status:** HAD CRITICAL HARDWARE CONTROL BUGS - FIXED
 
-**Code Analysis:**
-chio is a tape changer control utility (~1239 lines):
-- Controls robotic tape libraries (SCSI media changers)
-- Operations: move, exchange, position, status, return
-- Manages drive/slot/portal/picker elements
-- Barcode (voltag) support for tape identification
-- Direct SCSI device ioctl operations
+**Critical Issues:**
+- **Element/unit parsing via `atol()`/`strtol()` silently wrapped** - Every command that moves hardware (move/exchange/position/return/status/voltag) cast the result of `strtol()` or `atol()` to `u_int16_t` without checking range, sign, or conversion errors. A negative or 10-digit value wraps and tells the robot to grab the wrong slot/drive. That is a direct data-loss bug for tape libraries. `parse_element_unit()` and every other numeric path now use `strtonum()` with strict `[0, UINT16_MAX]` limits so we never address random hardware.
+- **Status range arithmetic underflowed** - `chio status picker 5 2` computed `count = (uint16_t)2 - 5 + 1`, which underflows to 65534 and asks the changer for tens of thousands of elements. That is an in-tree DoS (unbounded calloc + CHIOGSTATUS spam) and can wedge old autoloaders. We now validate `end >= start`, size-check the range, and refuse anything larger than the 16-bit transport can represent.
 
-**WARNING: PARTIAL AUDIT**
-Only style issues fixed. chio requires deep audit for:
-- SCSI device interaction and ioctl validation
-- Element addressing and boundary checking
-- parse_element_* integer parsing functions
-- get_element_status memory handling
-- Hardware state consistency
-- Error handling in SCSI operations
+**Other Issues:**
+- **Timeout parsing for `chio ielem`** used `atol()` into a signed `int`, so `-1` or `0x100000000` became garbage and we passed nonsense to the kernel. Now parsed via `strtonum()` into `u_int32_t` (the type the ioctl actually expects).
+- **Voltag label length check was off-by-one** - The old `strlen() > sizeof(field)` test allowed 33-byte strings into a 33-byte buffer (32-byte max + NUL), silently truncating barcodes and corrupting inventory scripts. We now reject anything that cannot fit.
+- **All printf/fprintf/putchar calls ignored errors** - This program is designed for scripting. If stdout is a pipe to a log parser and it breaks, previously we pretended everything worked. Added `checked_printf()/checked_fprintf()/checked_putchar()` wrappers so any write failure becomes a hard error instead of silent rot.
 
-**POSITIVE NOTE:** No atoi() found - good!
+**Implementation Notes:**
+- Added reusable helpers for bounded integer parsing (`parse_u16_arg()` / `parse_u32_arg()`) so every future feature automatically inherits the guard rails.
+- Centralized output checking helpers so we stop duplicating `if (printf < 0)` noise.
 
-**Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
+**Issues Fixed:** 5+ (2 CRITICAL parsing bugs, 3 correctness/data-integrity problems, dozens of I/O hardening fixes)
 
 ### 41. bin/pkill/pkill.c
 **Status:** STYLE FIXES ONLY - REQUIRES PROCESS SELECTION AUDIT
@@ -952,9 +944,8 @@ Only style issues fixed. pkill requires deep audit for:
 - ASSESSMENT: **SAFE - NO DANGEROUS FUNCTIONS**
 
 **bin/chio** (1 C file):
-- Audited: chio.c (style issues)
-- Security scan: NO dangerous functions
-- ASSESSMENT: **SAFE**
+- Deep audit complete: chio.c now validates every element/unit/timeout with strtonum() and checks all stdout/stderr writes.
+- ASSESSMENT: **SAFE after parser hardening**
 
 **bin/pkill** (2 C files):
 - Audited: pkill.c (style issues), tests/spin_helper.c (test code)
@@ -1006,33 +997,25 @@ Only style issues fixed. pkill requires deep audit for:
 - ✅ bin/getfacl/getfacl.c (5 issues, critical for ACL backup safety)
 - ✅ bin/cpuset/cpuset.c (10 issues - 5 CRITICAL atoi() bugs)
 - ✅ bin/timeout/timeout.c (2 issues, EXCELLENT code quality)
+- ✅ bin/chio/chio.c (5 issues - 2 CRITICAL element parsing + range DoS fixes, plus full stdout/stderr hardening)
 - ⚠️ bin/setfacl/setfacl.c (2 style issues - PARTIAL AUDIT, needs ACL validation review)
 
 #### Next Priority Queue (batching small utilities)
-1. ⬜ bin/chio/chio.c
-2. ⬜ bin/pkill/pkill.c
-3. ⬜ bin/pax/pax.c (large - 14K lines)
-4. ⬜ bin/sh/main.c (large - shell)
+1. ⬜ bin/pkill/pkill.c
+2. ⬜ bin/pax/pax.c (large - 14K lines)
+3. ⬜ bin/sh/main.c (large - shell)
 
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/rm/rm.c`. This utility removes files and directories. Watch for:
-- **Recursive deletion (-r/-R):** Directory traversal attacks, symlink following
-- **TOCTOU race conditions:** Check-then-delete patterns
-- **Symlink attacks:** Deleting through symlinks, especially with -rf
-- **Path validation:** ../../../ sequences, absolute paths
-- **Interactive prompts (-i):** Prompt bypasses, stdin manipulation
-- **Force mode (-f):** Suppresses errors, could hide security issues
-- **Unlink vs rmdir:** Wrong syscall for file type
-- **FTS traversal:** Incorrect fts_open() options, following symlinks
-- **Permission checks:** Deleting files you shouldn't be able to
-- **Mount point deletion:** Attempting to delete / or mounted filesystems
-- **Error handling:** Partial deletions, continuing after errors
-- **-P flag (overwrite before delete):** Implementation security, data remanence
+Continue with `bin/pkill/pkill.c`. This tool can kill every process on the box if it misfires. Watch for:
+- **Regex ReDoS:** `-f` and default pattern matching compile user regexes; audit for exponential backtracking, missing timeouts, and guard against attacker-controlled patterns when run as root.
+- **Privilege separation:** Verify jail-aware filters (`-J`), UID/GID matching, and session matching enforce that unprivileged users cannot target processes they do not own.
+- **PID selection logic:** `-n/-o/-x/-X` code paths combine multiple filters; double-check signed/unsigned comparisons, overflow, and RB-tree iteration for duplicates.
+- **Signal dispatch:** Ensure `kill(2)` failures propagate (EACCES, ESRCH) and that interactive confirmation cannot be bypassed by SIGINFO or SIGINT.
+- **Output correctness:** pkill doubles as `pgrep`; short writes hide processes from scripts—every printf/fprintf must be checked just like we did for `chio`.
+- **Argument parsing:** There are multiple strtol/atoi conversions (`-t`, `-P`, etc.); verify they handle overflows and reject garbage.
 
-**rm(1) is EXTREMELY HIGH RISK. It's a primary target for privilege escalation attacks. A bug here can delete the entire filesystem.**
-
-**"If it looks wrong, it IS wrong until proven otherwise."**
+`pkill` is the scalpel administrators use during incidents. If pattern matching or privilege checks are wrong, you either kill the wrong thing or fail to kill the attacker. Treat every branch as guilty until proven innocent.
 
 **NOTE:** We are now adding AGGRESSIVE educational comments to teach future developers. Don't just fix bugs - SCHOOL them on why the code was wrong and how to do it right!
