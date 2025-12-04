@@ -32,7 +32,8 @@ MAX_STEPS      ?= 100
 
 # SSH validation command - runs after each mutagenic change to verify builds
 # Empty string disables validation. Timeout is 5 minutes.
-SSH_VALIDATION_CMD ?= ssh freebsd.local "cd Src/freebsd-src-on-angry-AI && git pull && make buildworld"
+# The command is run with shell=True in Python, so shell operators work
+SSH_VALIDATION_CMD ?= ssh freebsd.local 'cd Src/freebsd-src-on-angry-AI && git pull && make buildworld'
 
 # Dependencies (non-torch)
 DEPS = \
@@ -108,16 +109,12 @@ show-config:
 	@echo "  Tokens     = $(MAX_NEW_TOKENS)"
 	@echo "  Temp       = $(TEMPERATURE)"
 	@echo "  Max steps  = $(MAX_STEPS)"
-	@if [ -n "$(SSH_VALIDATION_CMD)" ]; then \
-		echo "  Validation = $(SSH_VALIDATION_CMD)"; \
-	else \
-		echo "  Validation = (disabled)"; \
-	fi
+	@echo "  Validation = $(if $(SSH_VALIDATION_CMD),$(SSH_VALIDATION_CMD),(disabled))"
 	@echo "=================================================="
 
 run: deps model show-config
 	@echo "==> LETTING THE ANGRY AI LOOSE..."
-	$(PYTHON_VENV) angry_ai.py \
+	@$(PYTHON_VENV) angry_ai.py \
 		--repo "$(REPO)" \
 		--bootstrap "$(BOOTSTRAP)" \
 		--model "$(MODEL)" \
