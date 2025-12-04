@@ -53,11 +53,13 @@ def probe_nvidia_smi() -> Optional[str]:
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=True,
             text=True,
+            timeout=5,
         )
-        out = proc.stdout.strip()
-        return out or None
+        if proc.returncode == 0:
+            out = proc.stdout.strip()
+            return out if out else None
+        return None
     except Exception:
         return None
 

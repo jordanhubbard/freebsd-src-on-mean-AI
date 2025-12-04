@@ -22,7 +22,11 @@ make run
 ### VERY IMPORTANT NOTE for GPU users
 
 If you install everything with `make deps` it will pull a CPU torch wheel.  
-To accelerate using your GPU:
+To accelerate using your GPU, you need to install a CUDA-enabled PyTorch build.
+
+**Visit https://pytorch.org/get-started/locally/ to get the correct install command for your system.**
+
+For example, for CUDA 12.4:
 
 ```sh
 # 1) Enter the venv
@@ -106,8 +110,10 @@ make run
 
 ### GPU users (NVIDIA / CUDA)
 
-If you see `nvidia-smi` output and `torch.cuda.is_available() = False`, you likely have a CPU-only PyTorch wheel.  
-You can switch to a CUDA wheel roughly like this (example for CUDA 12.4; adjust as needed):
+If you see NVIDIA GPU info and `torch.cuda.is_available() = False`, you likely have a CPU-only PyTorch wheel.  
+You can switch to a CUDA wheel by following the instructions at **https://pytorch.org/get-started/locally/**
+
+Example for CUDA 12.4:
 
 ```sh
 cd freebsd-src-on-angry-AI/angry-ai
