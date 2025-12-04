@@ -417,6 +417,45 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         return ParsedAction(action="WRITE_FILE", argument=path, content=content)
 
+    if action == "RUN_COMMAND":
+        # Parse: ACTION: RUN_COMMAND
+        #        <<<\ncommand here\n>>>
+        body = llm_output[m.end():].strip()
+        
+        # Extract command block
+        cmd_match = re.search(r'<<<\n(.*?)\n>>>', body, re.DOTALL)
+        if not cmd_match:
+            raise ValueError("RUN_COMMAND: Could not find <<<\n...\n>>> block")
+        command = cmd_match.group(1)
+        
+        return ParsedAction(action="RUN_COMMAND", content=command)
+
+    if action == "EDIT_MULTIPLE":
+        # Parse: ACTION: EDIT_MULTIPLE
+        #        <<<\n[JSON array]\n>>>
+        body = llm_output[m.end():].strip()
+        
+        # Extract JSON block
+        json_match = re.search(r'<<<\n(.*?)\n>>>', body, re.DOTALL)
+        if not json_match:
+            raise ValueError("EDIT_MULTIPLE: Could not find <<<\n...\n>>> block")
+        json_content = json_match.group(1)
+        
+        return ParsedAction(action="EDIT_MULTIPLE", content=json_content)
+    
+    if action == "GIT_COMMIT":
+        # Parse: ACTION: GIT_COMMIT
+        #        <<<\ncommit message\n>>>
+        body = llm_output[m.end():].strip()
+        
+        # Extract message block
+        msg_match = re.search(r'<<<\n(.*?)\n>>>', body, re.DOTALL)
+        if not msg_match:
+            raise ValueError("GIT_COMMIT: Could not find <<<\n...\n>>> block")
+        message = msg_match.group(1)
+        
+        return ParsedAction(action="GIT_COMMIT", content=message)
+
     # All other actions: the rest of the line is the argument
     argument = rest.strip()
     
@@ -568,6 +607,442 @@ def tool_write_file(path: Path, content: str) -> str:
         return f"WRITE_FILE_ERROR for {path}: {e}\n"
 
 
+def tool_grep(pattern: str, path: Path, repo_root: Path) -> str:
+    """
+    Search for a pattern in files using grep.
+    
+    If path is a file, search only that file.
+    If path is a directory, search recursively.
+    """
+    try:
+        cmd = ["grep", "-n", "-r", "-I", pattern]
+        if path.is_file():
+            cmd.append(str(path))
+        elif path.is_dir():
+            cmd.append(str(path))
+        else:
+            return f"GREP_ERROR: Path does not exist: {path}\n"
+        
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            # Limit output to avoid overwhelming context
+            lines = proc.stdout.splitlines()
+            if len(lines) > 100:
+                output = "\n".join(lines[:100])
+                output += f"\n... (showing first 100 of {len(lines)} matches)"
+            else:
+                output = proc.stdout
+            return f"GREP_RESULT for pattern '{pattern}' in {path}:\n```\n{output}\n```\n"
+        elif proc.returncode == 1:
+            return f"GREP_RESULT: No matches found for pattern '{pattern}' in {path}\n"
+        else:
+            return f"GREP_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"GREP_ERROR: {e}\n"
+
+
+def tool_find_files(pattern: str, path: Path, repo_root: Path) -> str:
+    """
+    Find files matching a pattern (glob-style).
+    """
+    try:
+        cmd = ["find", str(path), "-name", pattern, "-type", "f"]
+        
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            lines = proc.stdout.splitlines()
+            if len(lines) > 200:
+                output = "\n".join(lines[:200])
+                output += f"\n... (showing first 200 of {len(lines)} files)"
+            else:
+                output = proc.stdout
+            return f"FIND_FILES_RESULT for pattern '{pattern}' in {path}:\n```\n{output}\n```\n"
+        else:
+            return f"FIND_FILES_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"FIND_FILES_ERROR: {e}\n"
+
+
+def tool_run_command(command: str, repo_root: Path, allowed_commands: List[str]) -> str:
+    """
+    Run a shell command in the repo root.
+    
+    Only whitelisted commands are allowed for security.
+    """
+    # Parse first word of command
+    cmd_parts = command.split()
+    if not cmd_parts:
+        return "RUN_COMMAND_ERROR: Empty command\n"
+    
+    cmd_name = cmd_parts[0]
+    
+    # Check whitelist
+    if cmd_name not in allowed_commands and not any(cmd_name.startswith(prefix) for prefix in allowed_commands):
+        return (
+            f"RUN_COMMAND_ERROR: Command '{cmd_name}' not in whitelist.\n"
+            f"Allowed commands: {', '.join(allowed_commands)}\n"
+        )
+    
+    try:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(repo_root),
+            timeout=60,  # 60 second timeout
+        )
+        
+        output = proc.stdout
+        # Limit output
+        if len(output) > 5000:
+            output = output[:5000] + f"\n... (output truncated, showing first 5000 chars)"
+        
+        return f"RUN_COMMAND_RESULT (exit code: {proc.returncode}):\n```\n{output}\n```\n"
+    except subprocess.TimeoutExpired:
+        return "RUN_COMMAND_ERROR: Command timed out (60s limit)\n"
+    except Exception as e:
+        return f"RUN_COMMAND_ERROR: {e}\n"
+
+
+def tool_read_file_lines(path: Path, start: int, end: int) -> str:
+    """
+    Read specific lines from a file (1-indexed, inclusive).
+    """
+    try:
+        if not path.exists():
+            return f"READ_FILE_LINES_ERROR: File does not exist: {path}\n"
+        if not path.is_file():
+            return f"READ_FILE_LINES_ERROR: Path is not a file: {path}\n"
+        
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        total_lines = len(lines)
+        
+        # Validate range
+        if start < 1 or end < 1:
+            return "READ_FILE_LINES_ERROR: Line numbers must be >= 1\n"
+        if start > total_lines:
+            return f"READ_FILE_LINES_ERROR: Start line {start} exceeds file length {total_lines}\n"
+        
+        # Adjust to 0-indexed and clamp end
+        start_idx = start - 1
+        end_idx = min(end, total_lines)
+        
+        selected = lines[start_idx:end_idx]
+        output = "\n".join(f"{i+start}: {line}" for i, line in enumerate(selected))
+        
+        return f"READ_FILE_LINES_RESULT for {path} lines {start}-{end_idx} (total: {total_lines}):\n```\n{output}\n```\n"
+    except Exception as e:
+        return f"READ_FILE_LINES_ERROR for {path}: {e}\n"
+
+
+def tool_git_status(repo_root: Path) -> str:
+    """
+    Run git status.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--short"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            return f"GIT_STATUS_RESULT:\n```\n{proc.stdout}\n```\n"
+        else:
+            return f"GIT_STATUS_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"GIT_STATUS_ERROR: {e}\n"
+
+
+def tool_git_diff(path: Optional[str], repo_root: Path) -> str:
+    """
+    Show git diff for a specific path or all changes.
+    """
+    try:
+        cmd = ["git", "diff"]
+        if path:
+            cmd.append(path)
+        
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            output = proc.stdout
+            if len(output) > 10000:
+                output = output[:10000] + "\n... (diff truncated, showing first 10000 chars)"
+            return f"GIT_DIFF_RESULT:\n```\n{output}\n```\n"
+        else:
+            return f"GIT_DIFF_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"GIT_DIFF_ERROR: {e}\n"
+
+
+def tool_git_commit(message: str, repo_root: Path) -> str:
+    """
+    Commit all changes with a message.
+    """
+    try:
+        # First add all changes
+        proc = subprocess.run(
+            ["git", "add", "-A"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode != 0:
+            return f"GIT_COMMIT_ERROR (git add): {proc.stderr}\n"
+        
+        # Then commit
+        proc = subprocess.run(
+            ["git", "commit", "-m", message],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            return f"GIT_COMMIT_OK:\n```\n{proc.stdout}\n```\n"
+        else:
+            return f"GIT_COMMIT_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"GIT_COMMIT_ERROR: {e}\n"
+
+
+def tool_show_diff(path: Path, repo_root: Path) -> str:
+    """
+    Show git diff for a specific file (what changed since last commit).
+    """
+    return tool_git_diff(str(path.relative_to(repo_root)), repo_root)
+
+
+def tool_edit_multiple(edits_json: str, repo_root: Path) -> str:
+    """
+    Apply multiple edits at once from a JSON array.
+    
+    Format: [{"file": "path", "old": "...", "new": "..."}, ...]
+    """
+    try:
+        import json
+        edits = json.loads(edits_json)
+        
+        if not isinstance(edits, list):
+            return "EDIT_MULTIPLE_ERROR: JSON must be an array of edit objects\n"
+        
+        results = []
+        for i, edit in enumerate(edits):
+            if not isinstance(edit, dict):
+                return f"EDIT_MULTIPLE_ERROR: Edit {i} is not an object\n"
+            
+            if "file" not in edit or "old" not in edit or "new" not in edit:
+                return f"EDIT_MULTIPLE_ERROR: Edit {i} missing required fields (file, old, new)\n"
+            
+            file_path = (repo_root / edit["file"]).resolve()
+            if not str(file_path).startswith(str(repo_root)):
+                return f"EDIT_MULTIPLE_ERROR: Edit {i} path escapes repo root: {edit['file']}\n"
+            
+            result = tool_edit_file(file_path, edit["old"], edit["new"])
+            results.append(f"Edit {i} ({edit['file']}): {result.strip()}")
+        
+        return "EDIT_MULTIPLE_RESULT:\n" + "\n".join(results) + "\n"
+    except json.JSONDecodeError as e:
+        return f"EDIT_MULTIPLE_ERROR: Invalid JSON: {e}\n"
+    except Exception as e:
+        return f"EDIT_MULTIPLE_ERROR: {e}\n"
+
+
+def tool_undo_last_edit(repo_root: Path) -> str:
+    """
+    Undo the last edit by reverting to HEAD.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "checkout", "HEAD", "."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            return "UNDO_LAST_EDIT_OK: Reverted all changes to last commit\n"
+        else:
+            return f"UNDO_LAST_EDIT_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"UNDO_LAST_EDIT_ERROR: {e}\n"
+
+
+def tool_restore_file(path: Path, repo_root: Path) -> str:
+    """
+    Restore a specific file to its last committed version.
+    """
+    try:
+        relative_path = path.relative_to(repo_root)
+        proc = subprocess.run(
+            ["git", "checkout", "HEAD", str(relative_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            return f"RESTORE_FILE_OK: Restored {path} to last commit\n"
+        else:
+            return f"RESTORE_FILE_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"RESTORE_FILE_ERROR: {e}\n"
+
+
+def tool_find_definition(symbol: str, path: Path, repo_root: Path) -> str:
+    """
+    Find definition of a symbol (function, struct, etc.) using grep heuristics.
+    
+    Looks for common C definition patterns.
+    """
+    try:
+        # Try different patterns for C definitions
+        patterns = [
+            f"^[a-zA-Z_][a-zA-Z0-9_* ]*\\s+{symbol}\\s*\\(",  # function definition
+            f"^struct\\s+{symbol}\\s*{{",  # struct definition
+            f"^typedef\\s+.*\\s+{symbol};",  # typedef
+            f"^#define\\s+{symbol}\\b",  # macro definition
+        ]
+        
+        results = []
+        for pattern in patterns:
+            cmd = ["grep", "-n", "-E", pattern]
+            if path.is_file():
+                cmd.append(str(path))
+            elif path.is_dir():
+                cmd.extend(["-r", str(path)])
+            else:
+                continue
+            
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(repo_root),
+            )
+            
+            if proc.returncode == 0 and proc.stdout.strip():
+                results.append(proc.stdout.strip())
+        
+        if results:
+            combined = "\n".join(results)
+            lines = combined.splitlines()
+            if len(lines) > 50:
+                combined = "\n".join(lines[:50]) + f"\n... (showing first 50 of {len(lines)} matches)"
+            return f"FIND_DEFINITION_RESULT for '{symbol}' in {path}:\n```\n{combined}\n```\n"
+        else:
+            return f"FIND_DEFINITION_RESULT: No definition found for '{symbol}' in {path}\n"
+    except Exception as e:
+        return f"FIND_DEFINITION_ERROR: {e}\n"
+
+
+def tool_find_references(symbol: str, path: Path, repo_root: Path) -> str:
+    """
+    Find all references to a symbol using grep.
+    """
+    try:
+        cmd = ["grep", "-n", "-w", symbol]
+        if path.is_file():
+            cmd.append(str(path))
+        elif path.is_dir():
+            cmd.extend(["-r", "-I", str(path)])
+        else:
+            return f"FIND_REFERENCES_ERROR: Path does not exist: {path}\n"
+        
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(repo_root),
+        )
+        
+        if proc.returncode == 0:
+            lines = proc.stdout.splitlines()
+            if len(lines) > 100:
+                output = "\n".join(lines[:100])
+                output += f"\n... (showing first 100 of {len(lines)} matches)"
+            else:
+                output = proc.stdout
+            return f"FIND_REFERENCES_RESULT for '{symbol}' in {path}:\n```\n{output}\n```\n"
+        elif proc.returncode == 1:
+            return f"FIND_REFERENCES_RESULT: No references found for '{symbol}' in {path}\n"
+        else:
+            return f"FIND_REFERENCES_ERROR: {proc.stderr}\n"
+    except Exception as e:
+        return f"FIND_REFERENCES_ERROR: {e}\n"
+
+
+def tool_check_syntax(path: Path, repo_root: Path) -> str:
+    """
+    Check syntax of a C file using gcc -fsyntax-only.
+    """
+    try:
+        if not path.exists():
+            return f"CHECK_SYNTAX_ERROR: File does not exist: {path}\n"
+        if not path.is_file():
+            return f"CHECK_SYNTAX_ERROR: Path is not a file: {path}\n"
+        
+        # Try gcc first, fall back to clang
+        for compiler in ["gcc", "clang"]:
+            try:
+                proc = subprocess.run(
+                    [compiler, "-fsyntax-only", "-std=c99", str(path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=str(repo_root),
+                    timeout=10,
+                )
+                
+                if proc.returncode == 0:
+                    return f"CHECK_SYNTAX_OK: No syntax errors in {path}\n"
+                else:
+                    output = proc.stderr
+                    if len(output) > 2000:
+                        output = output[:2000] + "\n... (output truncated)"
+                    return f"CHECK_SYNTAX_RESULT for {path}:\n```\n{output}\n```\n"
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                return "CHECK_SYNTAX_ERROR: Compilation timed out (10s limit)\n"
+        
+        return "CHECK_SYNTAX_ERROR: No C compiler (gcc/clang) found\n"
+    except Exception as e:
+        return f"CHECK_SYNTAX_ERROR: {e}\n"
+
+
 def _strip_markdown_fences(patch_text: str) -> str:
     """
     If the model wrapped the diff in ```...``` fences, strip them.
@@ -699,6 +1174,51 @@ def build_wrapper_system_prompt() -> str:
         "  >>>\n"
         "    - Writes content to a file (creates if doesn't exist)\n"
         "    - Use for new files or complete rewrites\n\n"
+        "  ACTION: GREP pattern relative/path\n"
+        "    - Search for a pattern in files (file or directory)\n"
+        "    - Example: ACTION: GREP \"security_check\" bin/pkill\n\n"
+        "  ACTION: FIND_FILES pattern relative/path\n"
+        "    - Find files matching a glob pattern\n"
+        "    - Example: ACTION: FIND_FILES \"*.c\" bin\n\n"
+        "  ACTION: READ_FILE_LINES relative/path/to/file start end\n"
+        "    - Read specific line range (1-indexed, inclusive)\n"
+        "    - Example: ACTION: READ_FILE_LINES bin/pkill/pkill.c 100 150\n\n"
+        "  ACTION: RUN_COMMAND\n"
+        "  <<<\n"
+        "  command to run\n"
+        "  >>>\n"
+        "    - Execute a shell command (whitelisted commands only)\n"
+        "    - Default whitelist: make, gcc, clang, python, python3, pytest, sh, bash\n"
+        "    - Use for testing, building, syntax checking\n\n"
+        "  ACTION: SHOW_DIFF relative/path/to/file\n"
+        "    - Show git diff for a file (what changed since last commit)\n\n"
+        "  ACTION: GIT_STATUS\n"
+        "    - Show git status (modified/untracked files)\n\n"
+        "  ACTION: GIT_DIFF [relative/path]\n"
+        "    - Show git diff for a file or all changes\n\n"
+        "  ACTION: GIT_COMMIT\n"
+        "  <<<\n"
+        "  commit message\n"
+        "  >>>\n"
+        "    - Commit all changes with a message\n\n"
+        "  ACTION: EDIT_MULTIPLE\n"
+        "  <<<\n"
+        "  [{\"file\": \"path1\", \"old\": \"...\", \"new\": \"...\"},\n"
+        "   {\"file\": \"path2\", \"old\": \"...\", \"new\": \"...\"}]\n"
+        "  >>>\n"
+        "    - Apply multiple edits at once (JSON format)\n\n"
+        "  ACTION: UNDO_LAST_EDIT\n"
+        "    - Revert all changes to last commit (git checkout HEAD .)\n\n"
+        "  ACTION: RESTORE_FILE relative/path/to/file\n"
+        "    - Restore a specific file to last committed version\n\n"
+        "  ACTION: FIND_DEFINITION symbol relative/path\n"
+        "    - Find where a symbol (function, struct, etc.) is defined\n"
+        "    - Example: ACTION: FIND_DEFINITION process_args bin/pkill\n\n"
+        "  ACTION: FIND_REFERENCES symbol relative/path\n"
+        "    - Find all uses of a symbol\n"
+        "    - Example: ACTION: FIND_REFERENCES process_args bin/pkill\n\n"
+        "  ACTION: CHECK_SYNTAX relative/path/to/file.c\n"
+        "    - Check C syntax using gcc/clang\n\n"
         "  ACTION: APPLY_PATCH\n"
         "  <unified diff follows here>\n"
         "    - Legacy method: applies a unified diff\n"
@@ -756,7 +1276,10 @@ def agent_loop(
     bootstrap_path: Path,
     llm: LocalLLM,
     max_steps: int = 100,
+    allowed_commands: Optional[List[str]] = None,
 ) -> None:
+    if allowed_commands is None:
+        allowed_commands = ["make", "gcc", "clang", "python", "python3", "pytest", "sh", "bash"]
     logs_dir = ensure_logs_dir(repo_root)
 
     # Read the repo's AI_START_HERE.md (bootstrap instructions & persona)
@@ -943,6 +1466,259 @@ def agent_loop(
             history.append({"role": "user", "content": result})
             continue
 
+        elif action == "GREP":
+            # Format: ACTION: GREP pattern path
+            parts = arg.split(None, 1)
+            if len(parts) < 2:
+                result = "GREP_ERROR: Usage: ACTION: GREP pattern path\n"
+            else:
+                pattern, path_str = parts
+                target = (repo_root / path_str).resolve()
+                if not str(target).startswith(str(repo_root)):
+                    result = f"GREP_ERROR: Path escapes repo root: {path_str}\n"
+                else:
+                    print(f"[AGENT TOOL] GREP '{pattern}' in {target}", file=sys.stderr)
+                    result = tool_grep(pattern, target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result[:2000] if len(result) > 2000 else result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "FIND_FILES":
+            # Format: ACTION: FIND_FILES pattern path
+            parts = arg.split(None, 1)
+            if len(parts) < 2:
+                result = "FIND_FILES_ERROR: Usage: ACTION: FIND_FILES pattern path\n"
+            else:
+                pattern, path_str = parts
+                target = (repo_root / path_str).resolve()
+                if not str(target).startswith(str(repo_root)):
+                    result = f"FIND_FILES_ERROR: Path escapes repo root: {path_str}\n"
+                else:
+                    print(f"[AGENT TOOL] FIND_FILES '{pattern}' in {target}", file=sys.stderr)
+                    result = tool_find_files(pattern, target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result[:2000] if len(result) > 2000 else result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "READ_FILE_LINES":
+            # Format: ACTION: READ_FILE_LINES path start end
+            parts = arg.split(None, 2)
+            if len(parts) < 3:
+                result = "READ_FILE_LINES_ERROR: Usage: ACTION: READ_FILE_LINES path start end\n"
+            else:
+                path_str, start_str, end_str = parts
+                try:
+                    start = int(start_str)
+                    end = int(end_str)
+                    target = (repo_root / path_str).resolve()
+                    if not str(target).startswith(str(repo_root)):
+                        result = f"READ_FILE_LINES_ERROR: Path escapes repo root: {path_str}\n"
+                    else:
+                        print(f"[AGENT TOOL] READ_FILE_LINES {target} {start}-{end}", file=sys.stderr)
+                        result = tool_read_file_lines(target, start, end)
+                except ValueError:
+                    result = "READ_FILE_LINES_ERROR: start and end must be integers\n"
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "RUN_COMMAND":
+            command = parsed.content or ""
+            print(f"[AGENT TOOL] RUN_COMMAND: {command[:100]}", file=sys.stderr)
+            result = tool_run_command(command, repo_root, allowed_commands)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "SHOW_DIFF":
+            target = (repo_root / arg).resolve()
+            if not str(target).startswith(str(repo_root)):
+                result = f"SHOW_DIFF_ERROR: Path escapes repo root: {arg}\n"
+            else:
+                print(f"[AGENT TOOL] SHOW_DIFF {target}", file=sys.stderr)
+                result = tool_show_diff(target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "GIT_STATUS":
+            print("[AGENT TOOL] GIT_STATUS", file=sys.stderr)
+            result = tool_git_status(repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "GIT_DIFF":
+            path_str = arg if arg else None
+            print(f"[AGENT TOOL] GIT_DIFF {path_str or '(all)'}", file=sys.stderr)
+            result = tool_git_diff(path_str, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "GIT_COMMIT":
+            message = parsed.content or ""
+            print(f"[AGENT TOOL] GIT_COMMIT", file=sys.stderr)
+            result = tool_git_commit(message, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "EDIT_MULTIPLE":
+            edits_json = parsed.content or ""
+            print(f"[AGENT TOOL] EDIT_MULTIPLE", file=sys.stderr)
+            result = tool_edit_multiple(edits_json, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "UNDO_LAST_EDIT":
+            print("[AGENT TOOL] UNDO_LAST_EDIT", file=sys.stderr)
+            result = tool_undo_last_edit(repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "RESTORE_FILE":
+            target = (repo_root / arg).resolve()
+            if not str(target).startswith(str(repo_root)):
+                result = f"RESTORE_FILE_ERROR: Path escapes repo root: {arg}\n"
+            else:
+                print(f"[AGENT TOOL] RESTORE_FILE {target}", file=sys.stderr)
+                result = tool_restore_file(target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "FIND_DEFINITION":
+            # Format: ACTION: FIND_DEFINITION symbol path
+            parts = arg.split(None, 1)
+            if len(parts) < 2:
+                result = "FIND_DEFINITION_ERROR: Usage: ACTION: FIND_DEFINITION symbol path\n"
+            else:
+                symbol, path_str = parts
+                target = (repo_root / path_str).resolve()
+                if not str(target).startswith(str(repo_root)):
+                    result = f"FIND_DEFINITION_ERROR: Path escapes repo root: {path_str}\n"
+                else:
+                    print(f"[AGENT TOOL] FIND_DEFINITION '{symbol}' in {target}", file=sys.stderr)
+                    result = tool_find_definition(symbol, target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result[:2000] if len(result) > 2000 else result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "FIND_REFERENCES":
+            # Format: ACTION: FIND_REFERENCES symbol path
+            parts = arg.split(None, 1)
+            if len(parts) < 2:
+                result = "FIND_REFERENCES_ERROR: Usage: ACTION: FIND_REFERENCES symbol path\n"
+            else:
+                symbol, path_str = parts
+                target = (repo_root / path_str).resolve()
+                if not str(target).startswith(str(repo_root)):
+                    result = f"FIND_REFERENCES_ERROR: Path escapes repo root: {path_str}\n"
+                else:
+                    print(f"[AGENT TOOL] FIND_REFERENCES '{symbol}' in {target}", file=sys.stderr)
+                    result = tool_find_references(symbol, target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result[:2000] if len(result) > 2000 else result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
+        elif action == "CHECK_SYNTAX":
+            target = (repo_root / arg).resolve()
+            if not str(target).startswith(str(repo_root)):
+                result = f"CHECK_SYNTAX_ERROR: Path escapes repo root: {arg}\n"
+            else:
+                print(f"[AGENT TOOL] CHECK_SYNTAX {target}", file=sys.stderr)
+                result = tool_check_syntax(target, repo_root)
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
         elif action == "APPLY_PATCH":
             print("[AGENT TOOL] APPLY_PATCH invoked", file=sys.stderr)
             print("[AGENT TOOL PATCH PREVIEW BEGIN]")
@@ -969,7 +1745,11 @@ def agent_loop(
                     "role": "user",
                     "content": (
                         f"ERROR: Unknown ACTION '{action}'. "
-                        "Valid actions are READ_FILE, LIST_DIR, EDIT_FILE, WRITE_FILE, APPLY_PATCH, HALT.\n"
+                        "Valid actions are: READ_FILE, LIST_DIR, EDIT_FILE, WRITE_FILE, "
+                        "GREP, FIND_FILES, READ_FILE_LINES, RUN_COMMAND, SHOW_DIFF, "
+                        "GIT_STATUS, GIT_DIFF, GIT_COMMIT, EDIT_MULTIPLE, UNDO_LAST_EDIT, "
+                        "RESTORE_FILE, FIND_DEFINITION, FIND_REFERENCES, CHECK_SYNTAX, "
+                        "APPLY_PATCH, HALT.\n"
                         "Respond again with a valid ACTION line as your FINAL line."
                     ),
                 }
@@ -1008,6 +1788,12 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--max-steps", type=int, default=100)
+    parser.add_argument(
+        "--allowed-commands",
+        nargs="+",
+        default=["make", "gcc", "clang", "python", "python3", "pytest", "sh", "bash"],
+        help="Whitelist of commands allowed for RUN_COMMAND action",
+    )
 
     args = parser.parse_args()
 
@@ -1043,6 +1829,7 @@ def main() -> None:
         bootstrap_path=bootstrap_path,
         llm=llm,
         max_steps=args.max_steps,
+        allowed_commands=args.allowed_commands,
     )
 
 
