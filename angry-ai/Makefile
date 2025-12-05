@@ -30,10 +30,19 @@ MAX_NEW_TOKENS ?= 512
 TEMPERATURE    ?= 0.1
 MAX_STEPS      ?= 100
 
+# BUILD_VALIDATE - controls whether SSH validation is enabled
+# Default: false (validation disabled by default since SSH command won't work on all hosts)
+# Set to true to enable validation: make run BUILD_VALIDATE=true
+BUILD_VALIDATE ?= false
+
 # SSH validation command - runs after each mutagenic change to verify builds
-# Empty string disables validation. Timeout is 5 minutes.
+# Only used if BUILD_VALIDATE=true. Empty string disables validation. Timeout is 5 minutes.
 # The command is run with shell=True in Python, so shell operators work
+ifeq ($(BUILD_VALIDATE),true)
 SSH_VALIDATION_CMD ?= ssh freebsd.local 'cd Src/freebsd-src-on-angry-AI && git pull && make buildworld'
+else
+SSH_VALIDATION_CMD :=
+endif
 
 # Dependencies (non-torch)
 DEPS = \
@@ -103,13 +112,14 @@ show-config:
 	@echo "=================================================="
 	@echo " Angry FreeBSD AI Configuration:"
 	@echo "--------------------------------------------------"
-	@echo "  Repo       = $(REPO)"
-	@echo "  Bootstrap  = $(BOOTSTRAP)"
-	@echo "  Model      = $(MODEL)"
-	@echo "  Tokens     = $(MAX_NEW_TOKENS)"
-	@echo "  Temp       = $(TEMPERATURE)"
-	@echo "  Max steps  = $(MAX_STEPS)"
-	@echo "  Validation = $(if $(SSH_VALIDATION_CMD),$(SSH_VALIDATION_CMD),(disabled))"
+	@echo "  Repo          = $(REPO)"
+	@echo "  Bootstrap     = $(BOOTSTRAP)"
+	@echo "  Model         = $(MODEL)"
+	@echo "  Tokens        = $(MAX_NEW_TOKENS)"
+	@echo "  Temp          = $(TEMPERATURE)"
+	@echo "  Max steps     = $(MAX_STEPS)"
+	@echo "  Build Validate= $(BUILD_VALIDATE)"
+	@echo "  Validation    = $(if $(SSH_VALIDATION_CMD),$(SSH_VALIDATION_CMD),(disabled))"
 	@echo "=================================================="
 
 run: deps model show-config
