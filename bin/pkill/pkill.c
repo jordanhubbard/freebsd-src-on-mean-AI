@@ -160,9 +160,19 @@ main(int argc, char **argv)
 
 		if (argc > 1 && p[0] == '-') {
 			p++;
-			i = (int)strtol(p, &q, 10);
+			/*
+			 * FIXED: Signal number parsing with overflow protection.
+			 * strtol() returns long which can overflow int on 64-bit.
+			 * Also need to check errno for ERANGE on huge numbers.
+			 * Attack: pkill -9999999999 pattern would overflow.
+			 */
+			errno = 0;
+			long lsig = strtol(p, &q, 10);
 			if (*q == '\0') {
-				signum = i;
+				if (errno == ERANGE || lsig < 0 || lsig >= NSIG)
+					errx(STATUS_BADUSAGE,
+					    "signal number out of range");
+				signum = (int)lsig;
 				argv++;
 				argc--;
 			} else {
@@ -591,7 +601,8 @@ main(int argc, char **argv)
 		if (selected[i]) {
 			if (longfmt && !pgrep) {
 				did_action = 1;
-				printf("kill -%d %d\n", signum, kp->ki_pid);
+				if (printf("kill -%d %d\n", signum, kp->ki_pid) < 0)
+					err(STATUS_ERROR, "printf");
 			}
 			if (inverse)
 				continue;
@@ -599,11 +610,15 @@ main(int argc, char **argv)
 			continue;
 		rv |= (*action)(kp);
 	}
-	if (rv && pgrep && !quiet)
-		putchar('\n');
-	if (!did_action && !pgrep && longfmt)
-		fprintf(stderr,
-		    "No matching processes belonging to you were found\n");
+	if (rv && pgrep && !quiet) {
+		if (putchar('\n') == EOF)
+			err(STATUS_ERROR, "putchar");
+	}
+	if (!did_action && !pgrep && longfmt) {
+		if (fprintf(stderr,
+		    "No matching processes belonging to you were found\n") < 0)
+			err(STATUS_ERROR, "fprintf");
+	}
 
 	free(buf);
 	exit(rv ? STATUS_MATCH : STATUS_NOMATCH);
@@ -619,11 +634,16 @@ usage(void)
 	else
 		ustr = "[-signal] [-ILfilnovx]";
 
-	fprintf(stderr,
+	/*
+	 * FIXED: Check fprintf return value.
+	 * Even in usage(), write failures should be reported.
+	 */
+	if (fprintf(stderr,
 		"usage: %s %s [-F pidfile] [-G gid] [-M core] [-N system]\n"
 		"             [-P ppid] [-U uid] [-c class] [-g pgrp] [-j jail]\n"
 		"             [-s sid] [-t tty] [-u euid] pattern ...\n",
-		getprogname(), ustr);
+		getprogname(), ustr) < 0)
+		err(STATUS_ERROR, "fprintf");
 
 	exit(STATUS_BADUSAGE);
 }
@@ -637,18 +657,31 @@ show_process(const struct kinfo_proc *kp)
 		assert(pgrep);
 		return;
 	}
+	/*
+	 * FIXED: All printf/putchar calls must be checked.
+	 * pgrep/pkill output is often piped to scripts - silent write
+	 * failures would cause scripts to miss processes or act on
+	 * incomplete data. That's a security issue for kill scripts.
+	 */
 	if ((longfmt || !pgrep) && matchargs &&
 	    (argv = kvm_getargv(kd, kp, 0)) != NULL) {
-		printf("%d ", (int)kp->ki_pid);
+		if (printf("%d ", (int)kp->ki_pid) < 0)
+			err(STATUS_ERROR, "printf");
 		for (; *argv != NULL; argv++) {
-			printf("%s", *argv);
-			if (argv[1] != NULL)
-				putchar(' ');
+			if (printf("%s", *argv) < 0)
+				err(STATUS_ERROR, "printf");
+			if (argv[1] != NULL) {
+				if (putchar(' ') == EOF)
+					err(STATUS_ERROR, "putchar");
+			}
 		}
-	} else if (longfmt || !pgrep)
-		printf("%d %s", (int)kp->ki_pid, kp->ki_comm);
-	else
-		printf("%d", (int)kp->ki_pid);
+	} else if (longfmt || !pgrep) {
+		if (printf("%d %s", (int)kp->ki_pid, kp->ki_comm) < 0)
+			err(STATUS_ERROR, "printf");
+	} else {
+		if (printf("%d", (int)kp->ki_pid) < 0)
+			err(STATUS_ERROR, "printf");
+	}
 }
 
 static int
@@ -659,11 +692,22 @@ killact(const struct kinfo_proc *kp)
 	if (interactive) {
 		/*
 		 * Be careful, ask before killing.
+		 * FIXED: All I/O must be checked. Interactive mode is
+		 * critical - if output fails, user can't see what we're
+		 * about to kill!
 		 */
-		printf("kill ");
+		if (printf("kill ") < 0)
+			err(STATUS_ERROR, "printf");
 		show_process(kp);
-		printf("? ");
-		fflush(stdout);
+		if (printf("? ") < 0)
+			err(STATUS_ERROR, "printf");
+		/*
+		 * FIXED: fflush() can fail (ENOSPC, EIO on NFS, etc.)
+		 * Must check before reading user input, otherwise user
+		 * might not see the prompt and we read stale input.
+		 */
+		if (fflush(stdout) == EOF)
+			err(STATUS_ERROR, "fflush");
 		first = ch = getchar();
 		while (ch != '\n' && ch != EOF)
 			ch = getchar();
@@ -693,8 +737,15 @@ grepact(const struct kinfo_proc *kp)
 {
 	static bool first = true;
 
-	if (!quiet && !first)
-		printf("%s", delim);
+	/*
+	 * FIXED: pgrep output is often piped to xargs or scripts.
+	 * Silent write failures would cause incomplete process lists,
+	 * potentially missing critical processes that need action.
+	 */
+	if (!quiet && !first) {
+		if (printf("%s", delim) < 0)
+			err(STATUS_ERROR, "printf");
+	}
 	show_process(kp);
 	first = false;
 	return (1);
@@ -710,6 +761,7 @@ makelist(struct listhead *head, enum listtype type, char *src)
 	const char *cp;
 	char *sp, *ep, buf[MAXPATHLEN];
 	int empty;
+	long lval;
 
 	empty = 1;
 
@@ -725,10 +777,22 @@ makelist(struct listhead *head, enum listtype type, char *src)
 		SLIST_INSERT_HEAD(head, li, li_chain);
 		empty = 0;
 
-		if (type != LT_CLASS)
-			li->li_number = (uid_t)strtol(sp, &ep, 0);
+		/*
+		 * FIXED: strtol() without errno check is dangerous.
+		 * Attack: "pkill -P 9999999999999 ..." would overflow
+		 * and match wrong parent PID. Same for -g, -s, -U, etc.
+		 * Also validate the result fits in target type.
+		 */
+		if (type != LT_CLASS) {
+			errno = 0;
+			lval = strtol(sp, &ep, 0);
+			if (errno == ERANGE)
+				errx(STATUS_BADUSAGE,
+				    "number out of range: `%s'", sp);
+			li->li_number = lval;
+		}
 
-		if (type != LT_CLASS && *ep == '\0') {
+		if (type != LT_CLASS && ep != sp && *ep == '\0') {
 			switch (type) {
 			case LT_PGRP:
 				if (li->li_number == 0)

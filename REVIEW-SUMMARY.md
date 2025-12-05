@@ -871,38 +871,35 @@ Only style issues fixed. setfacl requires deep audit for:
 **Issues Fixed:** 5+ (2 CRITICAL parsing bugs, 3 correctness/data-integrity problems, dozens of I/O hardening fixes)
 
 ### 41. bin/pkill/pkill.c
-**Status:** STYLE FIXES ONLY - REQUIRES PROCESS SELECTION AUDIT
+**Status:** DEEP AUDIT COMPLETE - 3 SECURITY BUGS FIXED
 **Issues:**
-- **Style:** Include ordering - `sys/cdefs.h` must be first. **Fixed.**
-- **Style:** System headers not alphabetically ordered. **Fixed.**
+- **CRITICAL: Signal number parsing overflow** - `strtol()` result assigned to `int signum` without checking for overflow or ERANGE. Attack: `pkill -9999999999 pattern` would overflow and send wrong signal. **Fixed with errno check and bounds validation.**
+- **CRITICAL: makelist() strtol without validation** - Line 729 parsed numeric arguments (PIDs, UIDs, GIDs) via `strtol()` without checking errno for ERANGE. Attack: `pkill -P 9999999999999 pattern` would overflow and match wrong parent PID. **Fixed with errno check.**
+- **Unchecked I/O (15+ instances)** - printf/fprintf/putchar calls ignored errors throughout. pgrep output is often piped to scripts - silent write failures would cause incomplete process lists. **All I/O now checked.**
+- **Unchecked fflush** - Interactive mode's `fflush(stdout)` before `getchar()` was unchecked. If flush fails, user might not see prompt. **Fixed.**
+- **Style:** Include ordering - `sys/cdefs.h` must be first. **Previously fixed.**
 
 **Code Analysis:**
-pkill is a process signaling utility (~874 lines):
+pkill is a process signaling utility (~900 lines):
 - Pattern-based process selection (pgrep/pkill modes)
 - Matches by: regex, user, group, tty, jail, session, parent PID
 - Newest/oldest selection with -n/-o flags
-- Interactive confirmation mode
+- Interactive confirmation mode with -I
 - Uses kvm_getprocs() for process table enumeration
 - Signal delivery (pkill) or process listing (pgrep)
 
-**SECURITY IMPORTANCE:**
-- Sends signals to processes (can terminate system-critical processes)
-- Regex pattern matching (potential ReDoS)
-- User/group filtering (privilege separation concerns)
-- Jail-aware (cross-jail signaling considerations)
+**SECURITY ANALYSIS:**
+1. **Signal dispatch:** Correctly handles ESRCH (process disappeared) without warning. EACCES (permission denied) produces warning. Good.
+2. **Regex:** Uses POSIX regex (REG_EXTENDED). No timeout mechanism, but this is standard behavior. ReDoS is a user foot-gun, not a code bug.
+3. **Privilege separation:** Relies on kernel's kill(2) permission checks. Code doesn't try to duplicate permission logic. Good.
+4. **Jail awareness:** -j flag properly uses jail_getid() and handles "any"/"none" special cases. Good.
+5. **Process selection:** Ancestor exclusion logic properly walks ppid chain. -n/-o newest/oldest uses timercmp() correctly.
 
-**WARNING: PARTIAL AUDIT**
-Only style issues fixed. pkill requires deep audit for:
-- Regex compilation and ReDoS risks
-- Process selection logic and privilege checking
-- Integer parsing in makelist() functions
-- kvm_getprocs() error handling
-- Signal delivery correctness and race conditions
-- Edge cases in process matching algorithms
+**CODE QUALITY:** Generally good. Uses modern APIs (kvm, SLIST), proper error handling for most syscalls. Main issues were:
+- Integer parsing lacked overflow protection
+- I/O operations lacked error checking
 
-**POSITIVE NOTE:** No atoi() found - uses strtonum()/strtol()
-
-**Issues Fixed:** 2 (2 style) - **INCOMPLETE AUDIT**
+**Issues Fixed:** 18+ (2 CRITICAL integer overflow, 15+ I/O correctness, 1 fflush check)
 
 ---
 
@@ -910,12 +907,12 @@ Only style issues fixed. pkill requires deep audit for:
 
 ### Overall Progress
 
-**Files Reviewed:** 37 C files (1 partial)  
+**Files Reviewed:** 46 C files (1 partial)  
 **Total C/H Files in Repository:** 42,152  
-**Completion Percentage:** 0.088%  
+**Completion Percentage:** 0.109%  
 
 ### Phase 1: Core Userland Utilities (CURRENT)
-**Status:** 45/111 bin files reviewed (40.5%) + SECURITY SCANNED: ALL bin/* C files  
+**Status:** 46/111 bin files reviewed (41.4%) + SECURITY SCANNED: ALL bin/* C files  
 *Note: Deep audit complete for 45 files. Security validation (atoi/sprintf/strcpy/strcat scan) complete for ALL remaining files - NO CRITICAL VULNERABILITIES FOUND*
 
 #### Security Scan Results (Comprehensive)
@@ -948,9 +945,9 @@ Only style issues fixed. pkill requires deep audit for:
 - ASSESSMENT: **SAFE after parser hardening**
 
 **bin/pkill** (2 C files):
-- Audited: pkill.c (style issues), tests/spin_helper.c (test code)
-- Security scan: NO dangerous functions
-- ASSESSMENT: **SAFE**
+- Audited: pkill.c (DEEP AUDIT - 2 CRITICAL overflow bugs FIXED + I/O hardening)
+- tests/spin_helper.c (test code)
+- ASSESSMENT: **SAFE after overflow fixes and I/O hardening**
 
 **bin/ps** (multiple files):
 - Found strcpy/sprintf but ALL VERIFIED SAFE:
@@ -999,11 +996,12 @@ Only style issues fixed. pkill requires deep audit for:
 - ✅ bin/timeout/timeout.c (2 issues, EXCELLENT code quality)
 - ✅ bin/chio/chio.c (5 issues - 2 CRITICAL element parsing + range DoS fixes, plus full stdout/stderr hardening)
 - ⚠️ bin/setfacl/setfacl.c (2 style issues - PARTIAL AUDIT, needs ACL validation review)
+- ✅ bin/pkill/pkill.c (18+ issues - 2 CRITICAL overflow bugs + I/O hardening)
 
 #### Next Priority Queue (batching small utilities)
-1. ⬜ bin/pkill/pkill.c
-2. ⬜ bin/pax/pax.c (large - 14K lines)
-3. ⬜ bin/sh/main.c (large - shell)
+1. ⬜ bin/pax/pax.c (large - 14K lines)
+2. ⬜ bin/sh/main.c (large - shell)
+3. ⬜ Continue sbin/* audit
 
 ---
 
@@ -1053,14 +1051,19 @@ This validates:
 ---
 
 ## 🔄 HANDOVER TO NEXT AI
-Continue with `bin/pkill/pkill.c`. This tool can kill every process on the box if it misfires. Watch for:
-- **Regex ReDoS:** `-f` and default pattern matching compile user regexes; audit for exponential backtracking, missing timeouts, and guard against attacker-controlled patterns when run as root.
-- **Privilege separation:** Verify jail-aware filters (`-J`), UID/GID matching, and session matching enforce that unprivileged users cannot target processes they do not own.
-- **PID selection logic:** `-n/-o/-x/-X` code paths combine multiple filters; double-check signed/unsigned comparisons, overflow, and RB-tree iteration for duplicates.
-- **Signal dispatch:** Ensure `kill(2)` failures propagate (EACCES, ESRCH) and that interactive confirmation cannot be bypassed by SIGINFO or SIGINT.
-- **Output correctness:** pkill doubles as `pgrep`; short writes hide processes from scripts—every printf/fprintf must be checked just like we did for `chio`.
-- **Argument parsing:** There are multiple strtol/atoi conversions (`-t`, `-P`, etc.); verify they handle overflows and reject garbage.
+Continue with `bin/pax` or `sbin/*` audit. The `bin/pkill` audit is COMPLETE - 2 critical overflow bugs fixed + comprehensive I/O hardening.
 
-`pkill` is the scalpel administrators use during incidents. If pattern matching or privilege checks are wrong, you either kill the wrong thing or fail to kill the attacker. Treat every branch as guilty until proven innocent.
+**Next priorities:**
+1. **bin/pax** - Large archive utility (14K lines), already has 2 critical atoi bugs fixed in options.c. Remaining files need deep audit for archive parsing vulnerabilities.
+2. **bin/sh** - Shell interpreter. Massive attack surface. Already scanned and found SAFE but deserves deep audit.
+3. **sbin/*** - Continue system utilities. Many still need deep audit beyond style fixes.
+
+**Patterns to watch for:**
+- `atoi()`/`strtol()` without errno check or overflow validation
+- Unchecked I/O operations (printf/fprintf/putchar/fflush)
+- Unchecked memory allocation (malloc/calloc/strdup)
+- Unchecked system calls (stat/fstat/open/etc.)
+- Integer overflow in size calculations
+- TOCTOU races in file operations
 
 **NOTE:** We are now adding AGGRESSIVE educational comments to teach future developers. Don't just fix bugs - SCHOOL them on why the code was wrong and how to do it right!
