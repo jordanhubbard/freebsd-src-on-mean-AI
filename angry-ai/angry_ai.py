@@ -473,16 +473,16 @@ def parse_action(llm_output: str) -> ParsedAction:
 # ---------------------------------------------------------------------------
 
 
-def tool_read_file(path: Path, max_chars: int = 20000) -> str:
+def tool_read_file(path: Path, max_chars: int = 8000) -> str:
     """
     Read a file and return its contents, truncating if necessary.
     
     Args:
         path: Path to the file
-        max_chars: Maximum number of characters to return (default 20K)
+        max_chars: Maximum number of characters to return (default 8K)
         
-    Note: 20K chars ≈ 5K tokens, leaving room for system prompts, history,
-    and multiple files in the 32K context window.
+    Note: 8K chars ≈ 2K tokens, helping prevent context overflow.
+    For large files, use READ_FILE_LINES to read specific sections.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -506,7 +506,11 @@ def tool_read_file(path: Path, max_chars: int = 20000) -> str:
             warning = (
                 f"\n\n[... FILE TRUNCATED: showing {line_count}/{total_lines} lines "
                 f"({char_count}/{len(text)} chars) ...]\n"
-                f"[... {remaining_lines} more lines not shown ...]\n"
+                f"[... {remaining_lines} more lines not shown ...]\n\n"
+                f"TIP: This file is large. To review it in manageable chunks:\n"
+                f"  1. Use READ_FILE_LINES {path.name} <start> <end> to read specific sections\n"
+                f"  2. Use SCAN_FILE {path.name} to see the file structure\n"
+                f"  3. Use GREP or FIND_DEFINITION to locate specific code\n"
             )
             return f"READ_FILE_RESULT for {path}:\n```text\n{truncated}{warning}```\n"
         
@@ -754,6 +758,68 @@ def tool_read_file_lines(path: Path, start: int, end: int) -> str:
         return f"READ_FILE_LINES_RESULT for {path} lines {start}-{end_idx} (total: {total_lines}):\n```\n{output}\n```\n"
     except Exception as e:
         return f"READ_FILE_LINES_ERROR for {path}: {e}\n"
+
+
+def tool_scan_file(path: Path) -> str:
+    """
+    Show file structure/outline without full content.
+    
+    For C files: shows function definitions, struct definitions, #defines, etc.
+    For other files: shows lines that look like definitions/headers.
+    
+    This is useful for getting an overview of a large file before diving into details.
+    """
+    try:
+        if not path.exists():
+            return f"SCAN_FILE_ERROR: File does not exist: {path}\n"
+        if not path.is_file():
+            return f"SCAN_FILE_ERROR: Path is not a file: {path}\n"
+        
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        total_lines = len(lines)
+        
+        # Patterns that indicate structure (C/C++ focused, but works for others too)
+        import re
+        structure_lines = []
+        
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            
+            # Skip empty lines and pure block markers
+            if not stripped or stripped in ['{', '}', '};']:
+                continue
+            
+            # C/C++ structure indicators
+            if (
+                # Function definitions (return_type function_name(...))
+                re.match(r'^[a-zA-Z_][a-zA-Z0-9_*\s]+\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([^)]*\)\s*$', stripped) or
+                # struct/union/enum definitions
+                re.match(r'^(struct|union|enum|typedef)\s+', stripped) or
+                # #define, #include, etc.
+                stripped.startswith('#') or
+                # Comments that look like section headers (/* ... */ or // ...)
+                (re.match(r'^/\*.*\*/$', stripped) and len(stripped) > 10) or
+                (stripped.startswith('//') and len(stripped) > 20) or
+                # Function prototypes (ends with semicolon after params)
+                re.match(r'^[a-zA-Z_][a-zA-Z0-9_*\s]+\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([^)]*\);', stripped) or
+                # Static/extern declarations
+                re.match(r'^(static|extern|const|volatile)\s+', stripped)
+            ):
+                structure_lines.append(f"{i:5d}: {line}")
+        
+        if not structure_lines:
+            return f"SCAN_FILE_RESULT for {path} ({total_lines} lines): No clear structure detected.\nUse READ_FILE_LINES to read specific sections.\n"
+        
+        # Limit output
+        if len(structure_lines) > 200:
+            output = "\n".join(structure_lines[:200])
+            output += f"\n... (showing first 200 of {len(structure_lines)} structure lines)"
+        else:
+            output = "\n".join(structure_lines)
+        
+        return f"SCAN_FILE_RESULT for {path} ({total_lines} lines, showing {min(len(structure_lines), 200)} structure lines):\n```\n{output}\n```\n"
+    except Exception as e:
+        return f"SCAN_FILE_ERROR for {path}: {e}\n"
 
 
 def tool_git_status(repo_root: Path) -> str:
@@ -1187,7 +1253,14 @@ def build_wrapper_system_prompt() -> str:
         "    - Example: ACTION: FIND_FILES \"*.c\" bin\n\n"
         "  ACTION: READ_FILE_LINES relative/path/to/file start end\n"
         "    - Read specific line range (1-indexed, inclusive)\n"
-        "    - Example: ACTION: READ_FILE_LINES bin/pkill/pkill.c 100 150\n\n"
+        "    - Example: ACTION: READ_FILE_LINES bin/pkill/pkill.c 100 150\n"
+        "    - IMPORTANT: Use this for large files to avoid context overflow\n\n"
+        "  ACTION: SCAN_FILE relative/path/to/file\n"
+        "    - Show file structure/outline without full content\n"
+        "    - Shows function definitions, structs, #defines, section comments\n"
+        "    - Use this FIRST for large files to get an overview\n"
+        "    - Then use READ_FILE_LINES to examine specific sections\n"
+        "    - Example: ACTION: SCAN_FILE bin/pkill/pkill.c\n\n"
         "  ACTION: RUN_COMMAND\n"
         "  <<<\n"
         "  command to run\n"
@@ -1235,6 +1308,8 @@ def build_wrapper_system_prompt() -> str:
         "- PREFER EDIT_FILE over APPLY_PATCH for code edits (simpler, more reliable).\n"
         "- For EDIT_FILE: Copy the exact text from READ_FILE, including whitespace.\n"
         "- For EDIT_FILE: Include enough surrounding lines to make OLD text unique.\n"
+        "- For LARGE files (>8K chars): Use SCAN_FILE first, then READ_FILE_LINES for specific sections.\n"
+        "  This prevents context overflow and ensures you can review files methodically.\n"
         "- When you are completely done, emit ACTION: HALT.\n"
         "- You may include commentary and analysis ABOVE the ACTION line, but your FINAL line\n"
         "  in every reply MUST be exactly one ACTION line.\n"
@@ -1698,6 +1773,23 @@ def agent_loop(
             history.append({"role": "user", "content": result})
             continue
 
+        elif action == "SCAN_FILE":
+            try:
+                target = resolve_repo_path(arg, repo_root)
+                print(f"[AGENT TOOL] SCAN_FILE {target}", file=sys.stderr)
+                result = tool_scan_file(target)
+            except ValueError as e:
+                result = f"SCAN_FILE_ERROR: {e}\n"
+
+            print("[AGENT TOOL RESULT BEGIN]")
+            print(result[:5000] if len(result) > 5000 else result)
+            print("[AGENT TOOL RESULT END]")
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            history.append({"role": "user", "content": result})
+            continue
+
         elif action == "RUN_COMMAND":
             command = parsed.content or ""
             print(f"[AGENT TOOL] RUN_COMMAND: {command[:100]}", file=sys.stderr)
@@ -1904,7 +1996,7 @@ def agent_loop(
                     "content": (
                         f"ERROR: Unknown ACTION '{action}'. "
                         "Valid actions are: READ_FILE, LIST_DIR, EDIT_FILE, WRITE_FILE, "
-                        "GREP, FIND_FILES, READ_FILE_LINES, RUN_COMMAND, SHOW_DIFF, "
+                        "GREP, FIND_FILES, READ_FILE_LINES, SCAN_FILE, RUN_COMMAND, SHOW_DIFF, "
                         "GIT_STATUS, GIT_DIFF, GIT_COMMIT, EDIT_MULTIPLE, UNDO_LAST_EDIT, "
                         "RESTORE_FILE, FIND_DEFINITION, FIND_REFERENCES, CHECK_SYNTAX, "
                         "APPLY_PATCH, HALT.\n"
