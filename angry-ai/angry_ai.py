@@ -556,12 +556,50 @@ def tool_list_dir(path: Path, show_ignored: bool = False) -> str:
         return f"LIST_DIR_ERROR for {path}: {e}\n"
 
 
+def find_all_occurrences(content: str, search_str: str) -> list[tuple[int, int, str]]:
+    """
+    Find all occurrences of search_str in content with line numbers.
+    
+    Returns: List of (start_line, end_line, context) tuples (1-indexed)
+    """
+    lines = content.splitlines(keepends=False)
+    search_lines = search_str.splitlines(keepends=False)
+    matches = []
+    
+    # Handle empty search (shouldn't happen but be safe)
+    if not search_lines:
+        return matches
+    
+    # Slide a window over the file looking for matches
+    for i in range(len(lines) - len(search_lines) + 1):
+        window = '\n'.join(lines[i:i+len(search_lines)])
+        if window == search_str:
+            start_line = i + 1  # 1-indexed
+            end_line = i + len(search_lines)
+            # Get some context (2 lines before/after)
+            context_start = max(0, i - 2)
+            context_end = min(len(lines), i + len(search_lines) + 2)
+            context_lines = []
+            for j in range(context_start, context_end):
+                prefix = ">>> " if j >= i and j < i + len(search_lines) else "    "
+                context_lines.append(f"{j+1:5d} {prefix}{lines[j]}")
+            context = '\n'.join(context_lines)
+            matches.append((start_line, end_line, context))
+    
+    return matches
+
+
 def tool_edit_file(path: Path, old_str: str, new_str: str) -> str:
     """
     Edit a file by finding and replacing old_str with new_str.
     
     This is more reliable than unified diffs for LLMs since it just requires
     copying exact text from a previous READ_FILE result.
+    
+    Improvements:
+    - Shows line numbers when multiple matches exist
+    - Provides context around each match
+    - Guides AI to add more surrounding lines
     """
     try:
         if not path.exists():
@@ -573,28 +611,68 @@ def tool_edit_file(path: Path, old_str: str, new_str: str) -> str:
         
         # Check if old_str exists in the file
         if old_str not in content:
+            # Try to give helpful feedback about what might be wrong
+            old_lines = old_str.strip().split('\n')
+            if len(old_lines) == 1:
+                # Single line - might appear with different context
+                hint = "\nHINT: You provided only 1 line. Include 3-5 surrounding lines for a unique match."
+            else:
+                hint = "\nHINT: Check whitespace (tabs vs spaces) and line endings."
+            
             return (
                 f"EDIT_FILE_ERROR: Could not find the OLD text in {path}\n\n"
                 "Make sure you copied the exact text from the file.\n"
-                "The OLD text must match exactly, including all whitespace.\n\n"
+                "The OLD text must match exactly, including all whitespace.\n"
+                f"{hint}\n\n"
                 f"You provided:\n<<<\n{old_str}\n>>>\n"
             )
         
         # Check if old_str appears multiple times
         count = content.count(old_str)
         if count > 1:
+            # Find all occurrences with line numbers and context
+            matches = find_all_occurrences(content, old_str)
+            
+            match_summary = []
+            for start_line, end_line, context in matches:
+                match_summary.append(
+                    f"\n  Match #{len(match_summary)+1} at lines {start_line}-{end_line}:\n{context}\n"
+                )
+            
+            all_matches = '\n'.join(match_summary)
+            
+            old_line_count = len(old_str.splitlines())
+            suggestion = ""
+            if old_line_count < 3:
+                suggestion = (
+                    f"\nSUGGESTION: You provided only {old_line_count} line(s). "
+                    "Include at least 5-7 lines of surrounding context (3 lines before + your target + 3 lines after) "
+                    "to make the match unique."
+                )
+            else:
+                suggestion = (
+                    "\nSUGGESTION: Add more surrounding lines (3-5 lines before/after) "
+                    "to distinguish between these matches."
+                )
+            
             return (
-                f"EDIT_FILE_ERROR: The OLD text appears {count} times in {path}\n\n"
-                "The OLD text must be unique in the file.\n"
-                "Please include more surrounding context to make it unique.\n\n"
-                f"You provided:\n<<<\n{old_str}\n>>>\n"
+                f"EDIT_FILE_ERROR: The OLD text appears {count} times in {path}\n"
+                f"{all_matches}\n"
+                f"The OLD text must be unique in the file.{suggestion}\n\n"
+                f"Your OLD block:\n<<<\n{old_str}\n>>>\n"
             )
         
         # Perform the replacement
         new_content = content.replace(old_str, new_str)
         path.write_text(new_content, encoding="utf-8")
         
-        return f"EDIT_FILE_OK: Successfully edited {path}\n"
+        # Report which line was edited
+        matches = find_all_occurrences(content, old_str)
+        if matches:
+            start_line, end_line, _ = matches[0]
+            return f"EDIT_FILE_OK: Successfully edited {path} (lines {start_line}-{end_line})\n"
+        else:
+            return f"EDIT_FILE_OK: Successfully edited {path}\n"
     except Exception as e:
         return f"EDIT_FILE_ERROR for {path}: {e}\n"
 
@@ -1227,7 +1305,7 @@ def build_wrapper_system_prompt() -> str:
         "  ACTION: EDIT_FILE relative/path/to/file\n"
         "  OLD:\n"
         "  <<<\n"
-        "  exact text to find\n"
+        "  exact text to find (MUST include 5-7 lines of context)\n"
         "  >>>\n"
         "  NEW:\n"
         "  <<<\n"
@@ -1236,8 +1314,10 @@ def build_wrapper_system_prompt() -> str:
         "    - Edits a file by finding and replacing OLD text with NEW text\n"
         "    - OLD text must be EXACT (copy from READ_FILE output)\n"
         "    - OLD text must be UNIQUE in the file\n"
-        "    - Include enough context to make OLD unique\n"
-        "    - Whitespace is preserved\n\n"
+        "    - CRITICAL: Include 5-7 lines (3 lines before + target + 3 lines after)\n"
+        "    - If match fails, you'll see all duplicate locations with line numbers\n"
+        "    - Single-line OLD blocks will be REJECTED\n"
+        "    - Whitespace must match exactly (tabs vs spaces)\n\n"
         "  ACTION: WRITE_FILE relative/path/to/file\n"
         "  CONTENT:\n"
         "  <<<\n"
@@ -1306,8 +1386,12 @@ def build_wrapper_system_prompt() -> str:
         "Rules:\n"
         "- Always use paths relative to the repository root.\n"
         "- PREFER EDIT_FILE over APPLY_PATCH for code edits (simpler, more reliable).\n"
-        "- For EDIT_FILE: Copy the exact text from READ_FILE, including whitespace.\n"
-        "- For EDIT_FILE: Include enough surrounding lines to make OLD text unique.\n"
+        "- For EDIT_FILE:\n"
+        "  * ALWAYS include 5-7 lines of surrounding context (3 before + target + 3 after)\n"
+        "  * Copy the EXACT text from READ_FILE output, including all whitespace\n"
+        "  * If you get 'appears N times' error, you'll see each location with line numbers\n"
+        "  * Add MORE context lines to distinguish between the matches\n"
+        "  * Never use single-line OLD blocks - they almost always appear multiple times\n"
         "- For LARGE files (>8K chars): Use SCAN_FILE first, then READ_FILE_LINES for specific sections.\n"
         "  This prevents context overflow and ensures you can review files methodically.\n"
         "- When you are completely done, emit ACTION: HALT.\n"
@@ -1316,24 +1400,31 @@ def build_wrapper_system_prompt() -> str:
         "- Example of a valid reply:\n"
         "    I will now inspect the pkill implementation for security issues.\n"
         "    ACTION: READ_FILE bin/pkill/pkill.c\n"
-        "- Another example (EDIT_FILE):\n"
-        "    I will add input validation to the process_args function.\n"
+        "- Another example (EDIT_FILE with proper context):\n"
+        "    I will add error checking to the printf call.\n"
         "    ACTION: EDIT_FILE bin/pkill/pkill.c\n"
         "    OLD:\n"
         "    <<<\n"
-        "    int main(int argc, char **argv) {\n"
-        "        process_args(argv);\n"
-        "        return 0;\n"
+        "    void usage(void) {\n"
+        "        fprintf(stderr, \"usage: pkill [-signal] [-ILafilnovx] pattern\\n\");\n"
+        "        printf(\"kill \");\n"
+        "        for (int i = 0; i < nsignals; i++) {\n"
+        "            printf(\"%s \", signals[i].name);\n"
+        "        }\n"
+        "        printf(\"\\n\");\n"
         "    }\n"
         "    >>>\n"
         "    NEW:\n"
         "    <<<\n"
-        "    int main(int argc, char **argv) {\n"
-        "        if (validate_args(argv) != 0) {\n"
-        "            return 1;\n"
+        "    void usage(void) {\n"
+        "        fprintf(stderr, \"usage: pkill [-signal] [-ILafilnovx] pattern\\n\");\n"
+        "        if (printf(\"kill \") < 0) {\n"
+        "            err(STATUS_ERROR, \"printf\");\n"
         "        }\n"
-        "        process_args(argv);\n"
-        "        return 0;\n"
+        "        for (int i = 0; i < nsignals; i++) {\n"
+        "            printf(\"%s \", signals[i].name);\n"
+        "        }\n"
+        "        printf(\"\\n\");\n"
         "    }\n"
         "    >>>\n"
         "- Keep your natural language commentary concise; focus on concrete actions.\n"
@@ -1426,6 +1517,13 @@ def run_validation_command(cmd: str, timeout: int = 300) -> tuple[bool, str]:
         
         output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
         success = result.returncode == 0
+        
+        if success:
+            print(f"[VALIDATION] ✓ Command completed successfully (exit code: 0)", file=sys.stderr)
+            stdout_lines = len(result.stdout.splitlines()) if result.stdout else 0
+            stderr_lines = len(result.stderr.splitlines()) if result.stderr else 0
+            print(f"[VALIDATION] Output: {stdout_lines} stdout lines, {stderr_lines} stderr lines", file=sys.stderr)
+            sys.stderr.flush()
         
         return success, output
     
@@ -2029,6 +2127,8 @@ def agent_loop(
                 sys.stderr.flush()
                 
                 # Run validation
+                print(f"[AGENT] Starting SSH validation (BUILD_VALIDATE=true)...", file=sys.stderr)
+                sys.stderr.flush()
                 validation_success, validation_output = run_validation_command(ssh_validation_cmd)
                 
                 if "timed out" in validation_output.lower():
@@ -2037,7 +2137,8 @@ def agent_loop(
                     break
                 
                 if validation_success:
-                    print(f"[AGENT] ✓ Validation passed!", file=sys.stderr)
+                    print(f"[AGENT] ✓ Validation passed! Changes are buildable.", file=sys.stderr)
+                    print(f"[AGENT] SSH validation command executed successfully.", file=sys.stderr)
                     sys.stderr.flush()
                     # Tell the model about success
                     history.append({

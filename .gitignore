@@ -30,3 +30,18 @@ tags
 .ccls-cache
 sys/*/compile
 /src.conf
+
+# Angry AI logs
+.angry-ai/
+angry-ai/.angry-ai/
+
+# Virtual environments
+.venv/
+venv/
+angry-ai/.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

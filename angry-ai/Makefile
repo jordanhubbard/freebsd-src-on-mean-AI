@@ -143,11 +143,17 @@ run: deps model show-config
 debug:
 	@echo "$(PYTHON_VENV) angry_ai.py --repo $(REPO) --bootstrap $(BOOTSTRAP) --model $(MODEL)"
 
+clean:
+	@echo "==> Cleaning up virtualenv and logs"
+	rm -rf $(VENV_DIR)
+	rm -rf $(REPO)/.angry-ai/logs
+
 clean-venv:
 	@echo "==> Removing virtualenv"
 	rm -rf $(VENV_DIR)
 
 clean-logs:
+	@echo "==> Removing logs"
 	rm -rf $(REPO)/.angry-ai/logs
 
-.PHONY: all venv deps run debug clean-venv clean-logs show-config model
+.PHONY: all venv deps run debug clean clean-venv clean-logs show-config model
