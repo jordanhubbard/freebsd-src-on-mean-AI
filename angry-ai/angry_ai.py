@@ -192,6 +192,16 @@ class LocalLLM:
         else:
             print(f"[LLM] Input tokens: {input_token_count} / {max_input_tokens}", file=sys.stderr)
 
+        # Show memory usage for fun
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1e9
+            reserved = torch.cuda.memory_reserved() / 1e9
+            total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"[LLM] GPU memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved / {total:.1f}GB total", file=sys.stderr)
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            allocated = torch.mps.current_allocated_memory() / 1e9
+            print(f"[LLM] MPS memory: {allocated:.2f}GB allocated", file=sys.stderr)
+
         print("[LLM] Starting generation...", file=sys.stderr)
         sys.stderr.flush()
 
