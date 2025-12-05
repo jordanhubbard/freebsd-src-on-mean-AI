@@ -294,7 +294,6 @@ static gid_t
 a_gid(const char *s)
 {
 	struct group *gr;
-	const char *gname;
 	gid_t gid;
 
 	if ((gr = getgrnam(s)) != NULL)
@@ -324,7 +323,6 @@ static uid_t
 a_uid(const char *s)
 {
 	struct passwd *pw;
-	const char *uname;
 	uid_t uid;
 
 	if ((pw = getpwnam(s)) != NULL)
