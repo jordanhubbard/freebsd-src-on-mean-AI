@@ -174,7 +174,7 @@ class LocalLLM:
         # Get model's maximum context length (default to 32K for Qwen2.5)
         max_context = getattr(self.tokenizer, 'model_max_length', 32768)
         # Reserve tokens for generation
-        max_input_tokens = max_context - self.max_new_tokens - 100  # 100 token safety buffer
+        max_input_tokens = max_context - self.max_new_tokens - 200  # 200 token safety buffer
         
         inputs = self.tokenizer(
             prompt, 
@@ -184,9 +184,11 @@ class LocalLLM:
         ).to(self.model.device)
         
         input_token_count = inputs["input_ids"].shape[1]
-        if input_token_count >= max_input_tokens - 100:
-            print(f"[LLM] WARNING: Input truncated! {input_token_count} tokens (limit: {max_input_tokens})", file=sys.stderr)
-            print("[LLM] Consider reducing context or file sizes in READ_FILE results.", file=sys.stderr)
+        if input_token_count >= max_input_tokens - 200:
+            print(f"[LLM] *** CRITICAL WARNING: Input truncated! ***", file=sys.stderr)
+            print(f"[LLM] Token usage: {input_token_count} / {max_input_tokens} (near limit!)", file=sys.stderr)
+            print(f"[LLM] Context may be corrupted. Model output may be unreliable.", file=sys.stderr)
+            print(f"[LLM] The agent's context pruning should prevent this.", file=sys.stderr)
         else:
             print(f"[LLM] Input tokens: {input_token_count} / {max_input_tokens}", file=sys.stderr)
 
@@ -1358,6 +1360,49 @@ def run_validation_command(cmd: str, timeout: int = 300) -> tuple[bool, str]:
         return False, f"Validation command failed: {e}"
 
 
+def prune_history(history: List[Dict[str, str]], max_turns: int = 15) -> List[Dict[str, str]]:
+    """
+    Prune conversation history to prevent context overflow.
+    
+    Strategy:
+    - Always keep messages at index 0 and 1 (system prompt + bootstrap)
+    - Keep only the last max_turns conversation turns
+    - Each turn = 1 assistant message + 1 user message
+    
+    Args:
+        history: Full conversation history
+        max_turns: Maximum number of recent turns to keep (default: 15)
+    
+    Returns:
+        Pruned history
+    """
+    if len(history) <= 2:
+        return history
+    
+    # Keep system prompt and bootstrap (indices 0, 1)
+    essential = history[:2]
+    
+    # Get conversation turns (everything after bootstrap)
+    conversation = history[2:]
+    
+    # Keep last max_turns * 2 messages (each turn has assistant + user message)
+    max_messages = max_turns * 2
+    if len(conversation) > max_messages:
+        # Add a summary message indicating we pruned history
+        pruned_count = len(conversation) - max_messages
+        summary = {
+            "role": "user",
+            "content": (
+                f"[CONTEXT MANAGEMENT: Pruned {pruned_count} older messages to prevent context overflow. "
+                f"Keeping last {max_turns} conversation turns. System prompt and bootstrap remain intact.]"
+            )
+        }
+        recent = conversation[-max_messages:]
+        return essential + [summary] + recent
+    
+    return history
+
+
 def agent_loop(
     repo_root: Path,
     bootstrap_path: Path,
@@ -1394,6 +1439,11 @@ def agent_loop(
 
     for step in range(1, max_steps + 1):
         print(f"[AGENT] Step {step} - querying LLM...", file=sys.stderr)
+        
+        # Prune history to prevent context overflow (keep last 15 turns = 30 messages)
+        # This ensures we stay well under the 32K token limit
+        history = prune_history(history, max_turns=15)
+        print(f"[AGENT] Context: {len(history)} messages in history", file=sys.stderr)
         sys.stderr.flush()
 
         llm_output = llm.chat(history)
