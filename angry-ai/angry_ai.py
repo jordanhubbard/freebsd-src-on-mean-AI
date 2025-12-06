@@ -462,6 +462,14 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         # Extract CONTENT block - lenient regex
         content_match = re.search(r'CONTENT:\s*<<<(.*?)>>>', body, re.DOTALL)
+        
+        # FALLBACK: If model used <<< as closing delimiter
+        if not content_match:
+            fallback_match = re.search(r'CONTENT:\s*<<<(.*?)(?:<<<\s*)?$', body, re.DOTALL)
+            if fallback_match:
+                content_match = fallback_match
+                print("[PARSE WARNING] WRITE_FILE: Model used <<< as closing delimiter. Using fallback parser.", file=sys.stderr)
+        
         if not content_match:
             preview = body[:500].replace('\n', '\\n')
             raise ValueError(
@@ -472,7 +480,8 @@ def parse_action(llm_output: str) -> ParsedAction:
                 f"  file content here\n"
                 f"  >>>\n"
                 f"Body preview (first 500 chars): {preview}...\n"
-                f"Full body length: {len(body)} characters"
+                f"Full body length: {len(body)} characters\n\n"
+                f"HINT: Use >>> to close, not <<<"
             )
         content = content_match.group(1).strip()
         content = strip_markdown_fences(content)
@@ -486,6 +495,14 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         # Extract command block - lenient regex
         cmd_match = re.search(r'<<<(.*?)>>>', body, re.DOTALL)
+        
+        # FALLBACK: If model used <<< as closing delimiter
+        if not cmd_match:
+            fallback_match = re.search(r'<<<(.*?)(?:<<<\s*)?$', body, re.DOTALL)
+            if fallback_match:
+                cmd_match = fallback_match
+                print("[PARSE WARNING] RUN_COMMAND: Model used <<< as closing delimiter. Using fallback parser.", file=sys.stderr)
+        
         if not cmd_match:
             preview = body[:300].replace('\n', '\\n')
             raise ValueError(
@@ -494,7 +511,8 @@ def parse_action(llm_output: str) -> ParsedAction:
                 f"  <<<\n"
                 f"  command here\n"
                 f"  >>>\n"
-                f"Body preview: {preview}..."
+                f"Body preview: {preview}...\n\n"
+                f"HINT: Use >>> to close, not <<<"
             )
         command = cmd_match.group(1).strip()
         
@@ -507,6 +525,14 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         # Extract JSON block - lenient regex
         json_match = re.search(r'<<<(.*?)>>>', body, re.DOTALL)
+        
+        # FALLBACK: If model used <<< as closing delimiter
+        if not json_match:
+            fallback_match = re.search(r'<<<(.*?)(?:<<<\s*)?$', body, re.DOTALL)
+            if fallback_match:
+                json_match = fallback_match
+                print("[PARSE WARNING] EDIT_MULTIPLE: Model used <<< as closing delimiter. Using fallback parser.", file=sys.stderr)
+        
         if not json_match:
             preview = body[:300].replace('\n', '\\n')
             raise ValueError(
@@ -515,7 +541,8 @@ def parse_action(llm_output: str) -> ParsedAction:
                 f"  <<<\n"
                 f"  [JSON array]\n"
                 f"  >>>\n"
-                f"Body preview: {preview}..."
+                f"Body preview: {preview}...\n\n"
+                f"HINT: Use >>> to close, not <<<"
             )
         json_content = json_match.group(1).strip()
         
@@ -528,6 +555,14 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         # Extract message block - lenient regex
         msg_match = re.search(r'<<<(.*?)>>>', body, re.DOTALL)
+        
+        # FALLBACK: If model used <<< as closing delimiter
+        if not msg_match:
+            fallback_match = re.search(r'<<<(.*?)(?:<<<\s*)?$', body, re.DOTALL)
+            if fallback_match:
+                msg_match = fallback_match
+                print("[PARSE WARNING] GIT_COMMIT: Model used <<< as closing delimiter. Using fallback parser.", file=sys.stderr)
+        
         if not msg_match:
             preview = body[:300].replace('\n', '\\n')
             raise ValueError(
@@ -536,7 +571,8 @@ def parse_action(llm_output: str) -> ParsedAction:
                 f"  <<<\n"
                 f"  commit message\n"
                 f"  >>>\n"
-                f"Body preview: {preview}..."
+                f"Body preview: {preview}...\n\n"
+                f"HINT: Use >>> to close, not <<<"
             )
         message = msg_match.group(1).strip()
         
