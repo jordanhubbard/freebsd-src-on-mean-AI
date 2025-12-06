@@ -367,38 +367,66 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         body = llm_output[m.end():].strip()
         
-        # Extract OLD block - more lenient regex (allows whitespace variations)
-        # Matches: OLD: <<< or OLD:\n<<<
-        old_match = re.search(r'OLD:\s*\n?\s*<<<\s*\n(.*?)\n\s*>>>', body, re.DOTALL)
+        # Extract OLD block - lenient regex that allows flexible whitespace
+        # Matches: OLD:<<<...>>> with any amount of whitespace around delimiters
+        old_match = re.search(r'OLD:\s*<<<(.*?)>>>', body, re.DOTALL)
         if not old_match:
             # Show what we found for debugging
-            preview = body[:300].replace('\n', '\\n')
+            preview = body[:500].replace('\n', '\\n')
             raise ValueError(
-                f"EDIT_FILE: Could not find OLD:\\n<<<\\n...\\n>>> block.\n"
+                f"EDIT_FILE: Could not find OLD:<<<...>>> block.\n"
                 f"Expected format:\n"
                 f"  OLD:\n"
                 f"  <<<\n"
                 f"  old text here\n"
                 f"  >>>\n"
-                f"Body preview: {preview}..."
+                f"Body preview (first 500 chars): {preview}..."
             )
-        old_str = old_match.group(1)
+        old_str = old_match.group(1).strip()  # Strip whitespace from content
         old_str = strip_markdown_fences(old_str)
         
-        # Extract NEW block - more lenient regex
-        new_match = re.search(r'NEW:\s*\n?\s*<<<\s*\n(.*?)\n\s*>>>', body, re.DOTALL)
+        # Extract NEW block - lenient regex
+        new_match = re.search(r'NEW:\s*<<<(.*?)>>>', body, re.DOTALL)
         if not new_match:
-            preview = body[:300].replace('\n', '\\n')
-            raise ValueError(
-                f"EDIT_FILE: Could not find NEW:\\n<<<\\n...\\n>>> block.\n"
+            # Better diagnostics: show more context and check for truncation
+            preview = body[:800].replace('\n', '\\n')
+            
+            # Check if output might be truncated
+            has_old = 'OLD:' in body and '<<<' in body
+            has_new_start = 'NEW:' in body
+            body_ends_abruptly = not body.endswith('>>>')
+            
+            error_msg = f"EDIT_FILE: Could not find NEW:<<<...>>> block.\n"
+            
+            if has_old and has_new_start and body_ends_abruptly:
+                error_msg += (
+                    "\n*** OUTPUT APPEARS TRUNCATED ***\n"
+                    f"Found OLD block and 'NEW:' marker, but output ends without closing '>>>'.\n"
+                    f"This usually means the LLM output was cut off due to max_new_tokens limit.\n\n"
+                    f"SOLUTIONS:\n"
+                    f"  1. Increase max_new_tokens (currently generates up to ~2048 tokens)\n"
+                    f"  2. Use smaller OLD/NEW blocks (include only essential context)\n"
+                    f"  3. Use EDIT_MULTIPLE for multiple small edits instead of one large edit\n\n"
+                )
+            elif has_old and not has_new_start:
+                error_msg += (
+                    "\n*** NEW BLOCK COMPLETELY MISSING ***\n"
+                    f"Found OLD block but no 'NEW:' marker at all.\n"
+                    f"Output was likely truncated before NEW block could be generated.\n\n"
+                )
+            
+            error_msg += (
                 f"Expected format:\n"
                 f"  NEW:\n"
                 f"  <<<\n"
                 f"  new text here\n"
-                f"  >>>\n"
-                f"Body preview: {preview}..."
+                f"  >>>\n\n"
+                f"Body preview (first 800 chars): {preview}...\n\n"
+                f"Full body length: {len(body)} characters"
             )
-        new_str = new_match.group(1)
+            raise ValueError(error_msg)
+        
+        new_str = new_match.group(1).strip()  # Strip whitespace from content
         new_str = strip_markdown_fences(new_str)
         
         return ParsedAction(action="EDIT_FILE", argument=path, old_str=old_str, new_str=new_str)
@@ -411,20 +439,21 @@ def parse_action(llm_output: str) -> ParsedAction:
         
         body = llm_output[m.end():].strip()
         
-        # Extract CONTENT block - more lenient regex
-        content_match = re.search(r'CONTENT:\s*\n?\s*<<<\s*\n(.*?)\n\s*>>>', body, re.DOTALL)
+        # Extract CONTENT block - lenient regex
+        content_match = re.search(r'CONTENT:\s*<<<(.*?)>>>', body, re.DOTALL)
         if not content_match:
-            preview = body[:300].replace('\n', '\\n')
+            preview = body[:500].replace('\n', '\\n')
             raise ValueError(
-                f"WRITE_FILE: Could not find CONTENT:\\n<<<\\n...\\n>>> block.\n"
+                f"WRITE_FILE: Could not find CONTENT:<<<...>>> block.\n"
                 f"Expected format:\n"
                 f"  CONTENT:\n"
                 f"  <<<\n"
                 f"  file content here\n"
                 f"  >>>\n"
-                f"Body preview: {preview}..."
+                f"Body preview (first 500 chars): {preview}...\n"
+                f"Full body length: {len(body)} characters"
             )
-        content = content_match.group(1)
+        content = content_match.group(1).strip()
         content = strip_markdown_fences(content)
         
         return ParsedAction(action="WRITE_FILE", argument=path, content=content)
@@ -434,11 +463,19 @@ def parse_action(llm_output: str) -> ParsedAction:
         #        <<<\ncommand here\n>>>
         body = llm_output[m.end():].strip()
         
-        # Extract command block
-        cmd_match = re.search(r'<<<\n(.*?)\n>>>', body, re.DOTALL)
+        # Extract command block - lenient regex
+        cmd_match = re.search(r'<<<(.*?)>>>', body, re.DOTALL)
         if not cmd_match:
-            raise ValueError("RUN_COMMAND: Could not find <<<\n...\n>>> block")
-        command = cmd_match.group(1)
+            preview = body[:300].replace('\n', '\\n')
+            raise ValueError(
+                f"RUN_COMMAND: Could not find <<<...>>> block.\n"
+                f"Expected format:\n"
+                f"  <<<\n"
+                f"  command here\n"
+                f"  >>>\n"
+                f"Body preview: {preview}..."
+            )
+        command = cmd_match.group(1).strip()
         
         return ParsedAction(action="RUN_COMMAND", content=command)
 
@@ -447,11 +484,19 @@ def parse_action(llm_output: str) -> ParsedAction:
         #        <<<\n[JSON array]\n>>>
         body = llm_output[m.end():].strip()
         
-        # Extract JSON block
-        json_match = re.search(r'<<<\n(.*?)\n>>>', body, re.DOTALL)
+        # Extract JSON block - lenient regex
+        json_match = re.search(r'<<<(.*?)>>>', body, re.DOTALL)
         if not json_match:
-            raise ValueError("EDIT_MULTIPLE: Could not find <<<\n...\n>>> block")
-        json_content = json_match.group(1)
+            preview = body[:300].replace('\n', '\\n')
+            raise ValueError(
+                f"EDIT_MULTIPLE: Could not find <<<...>>> block.\n"
+                f"Expected format:\n"
+                f"  <<<\n"
+                f"  [JSON array]\n"
+                f"  >>>\n"
+                f"Body preview: {preview}..."
+            )
+        json_content = json_match.group(1).strip()
         
         return ParsedAction(action="EDIT_MULTIPLE", content=json_content)
     
@@ -460,11 +505,19 @@ def parse_action(llm_output: str) -> ParsedAction:
         #        <<<\ncommit message\n>>>
         body = llm_output[m.end():].strip()
         
-        # Extract message block
-        msg_match = re.search(r'<<<\n(.*?)\n>>>', body, re.DOTALL)
+        # Extract message block - lenient regex
+        msg_match = re.search(r'<<<(.*?)>>>', body, re.DOTALL)
         if not msg_match:
-            raise ValueError("GIT_COMMIT: Could not find <<<\n...\n>>> block")
-        message = msg_match.group(1)
+            preview = body[:300].replace('\n', '\\n')
+            raise ValueError(
+                f"GIT_COMMIT: Could not find <<<...>>> block.\n"
+                f"Expected format:\n"
+                f"  <<<\n"
+                f"  commit message\n"
+                f"  >>>\n"
+                f"Body preview: {preview}..."
+            )
+        message = msg_match.group(1).strip()
         
         return ParsedAction(action="GIT_COMMIT", content=message)
 
