@@ -370,6 +370,16 @@ def parse_action(llm_output: str) -> ParsedAction:
         # Extract OLD block - lenient regex that allows flexible whitespace
         # Matches: OLD:<<<...>>> with any amount of whitespace around delimiters
         old_match = re.search(r'OLD:\s*<<<(.*?)>>>', body, re.DOTALL)
+        
+        # FALLBACK: If model used <<< as closing delimiter instead of >>>
+        if not old_match and 'NEW:' in body:
+            # Try to extract OLD block by finding content between first <<< and NEW:
+            # Common error: OLD:<<<content<<<NEW: instead of OLD:<<<content>>>NEW:
+            fallback_match = re.search(r'OLD:\s*<<<(.*?)(?:<<<\s*)?NEW:', body, re.DOTALL)
+            if fallback_match:
+                old_match = fallback_match
+                print("[PARSE WARNING] Model used <<< as closing delimiter instead of >>>. Using fallback parser.", file=sys.stderr)
+        
         if not old_match:
             # Show what we found for debugging
             preview = body[:500].replace('\n', '\\n')
@@ -380,13 +390,24 @@ def parse_action(llm_output: str) -> ParsedAction:
                 f"  <<<\n"
                 f"  old text here\n"
                 f"  >>>\n"
-                f"Body preview (first 500 chars): {preview}..."
+                f"Body preview (first 500 chars): {preview}...\n\n"
+                f"HINT: Make sure to use >>> (not <<<) to close blocks!"
             )
         old_str = old_match.group(1).strip()  # Strip whitespace from content
         old_str = strip_markdown_fences(old_str)
         
         # Extract NEW block - lenient regex
         new_match = re.search(r'NEW:\s*<<<(.*?)>>>', body, re.DOTALL)
+        
+        # FALLBACK: If model used <<< as closing delimiter instead of >>>
+        if not new_match:
+            # Try to extract NEW block from NEW: to end of body (or to next <<<)
+            # Common error: NEW:<<<content<<< instead of NEW:<<<content>>>
+            fallback_match = re.search(r'NEW:\s*<<<(.*?)(?:<<<\s*)?$', body, re.DOTALL)
+            if fallback_match:
+                new_match = fallback_match
+                print("[PARSE WARNING] Model used <<< as closing delimiter for NEW block. Using fallback parser.", file=sys.stderr)
+        
         if not new_match:
             # Better diagnostics: show more context and check for truncation
             preview = body[:800].replace('\n', '\\n')
@@ -1358,12 +1379,13 @@ def build_wrapper_system_prompt() -> str:
         "  OLD:\n"
         "  <<<\n"
         "  exact text to find (MUST include 5-7 lines of context)\n"
-        "  >>>\n"
+        "  >>>  <-- IMPORTANT: Use >>> (three greater-than) to CLOSE blocks, NOT <<<\n"
         "  NEW:\n"
         "  <<<\n"
         "  replacement text\n"
-        "  >>>\n"
+        "  >>>  <-- IMPORTANT: Use >>> (three greater-than) to CLOSE blocks, NOT <<<\n"
         "    - Edits a file by finding and replacing OLD text with NEW text\n"
+        "    - DELIMITER RULE: <<<opens a block, >>> closes it (NOT <<<)\n"
         "    - OLD text must be EXACT (copy from READ_FILE output)\n"
         "    - OLD text must be UNIQUE in the file\n"
         "    - CRITICAL: Include 5-7 lines (3 lines before + target + 3 lines after)\n"
@@ -1374,7 +1396,7 @@ def build_wrapper_system_prompt() -> str:
         "  CONTENT:\n"
         "  <<<\n"
         "  entire file content\n"
-        "  >>>\n"
+        "  >>>  <-- IMPORTANT: Use >>> to close, NOT <<<\n"
         "    - Writes content to a file (creates if doesn't exist)\n"
         "    - Use for new files or complete rewrites\n\n"
         "  ACTION: GREP pattern relative/path\n"
