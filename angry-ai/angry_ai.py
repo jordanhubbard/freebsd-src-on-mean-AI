@@ -827,25 +827,14 @@ def tool_find_files(pattern: str, path: Path, repo_root: Path) -> str:
         return f"FIND_FILES_ERROR: {e}\n"
 
 
-def tool_run_command(command: str, repo_root: Path, allowed_commands: List[str]) -> str:
+def tool_run_command(command: str, repo_root: Path) -> str:
     """
     Run a shell command in the repo root.
     
-    Only whitelisted commands are allowed for security.
+    All commands are allowed - no whitelist restrictions.
     """
-    # Parse first word of command
-    cmd_parts = command.split()
-    if not cmd_parts:
+    if not command.strip():
         return "RUN_COMMAND_ERROR: Empty command\n"
-    
-    cmd_name = cmd_parts[0]
-    
-    # Check whitelist
-    if cmd_name not in allowed_commands and not any(cmd_name.startswith(prefix) for prefix in allowed_commands):
-        return (
-            f"RUN_COMMAND_ERROR: Command '{cmd_name}' not in whitelist.\n"
-            f"Allowed commands: {', '.join(allowed_commands)}\n"
-        )
     
     try:
         proc = subprocess.run(
@@ -1408,9 +1397,8 @@ def build_wrapper_system_prompt() -> str:
         "  <<<\n"
         "  command to run\n"
         "  >>>\n"
-        "    - Execute a shell command (whitelisted commands only)\n"
-        "    - Default whitelist: make, gcc, clang, python, python3, pytest, sh, bash\n"
-        "    - Use for testing, building, syntax checking\n\n"
+        "    - Execute any shell command\n"
+        "    - Use for testing, building, syntax checking, git operations, etc.\n\n"
         "  ACTION: SHOW_DIFF relative/path/to/file\n"
         "    - Show git diff for a file (what changed since last commit)\n\n"
         "  ACTION: GIT_STATUS\n"
@@ -1644,11 +1632,8 @@ def agent_loop(
     bootstrap_path: Path,
     llm: LocalLLM,
     max_steps: int = 100,
-    allowed_commands: Optional[List[str]] = None,
     ssh_validation_cmd: str = "",
 ) -> None:
-    if allowed_commands is None:
-        allowed_commands = ["make", "gcc", "clang", "python", "python3", "pytest", "sh", "bash"]
     logs_dir = ensure_logs_dir(repo_root)
     
     # Track if we need validation after this step
@@ -1954,7 +1939,7 @@ def agent_loop(
         elif action == "RUN_COMMAND":
             command = parsed.content or ""
             print(f"[AGENT TOOL] RUN_COMMAND: {command[:100]}", file=sys.stderr)
-            result = tool_run_command(command, repo_root, allowed_commands)
+            result = tool_run_command(command, repo_root)
 
             print("[AGENT TOOL RESULT BEGIN]")
             print(result)
@@ -2270,12 +2255,6 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--max-steps", type=int, default=100)
     parser.add_argument(
-        "--allowed-commands",
-        nargs="+",
-        default=["make", "gcc", "clang", "python", "python3", "pytest", "sh", "bash"],
-        help="Whitelist of commands allowed for RUN_COMMAND action",
-    )
-    parser.add_argument(
         "--ssh-validation-cmd",
         default="",
         help="SSH command to run after mutagenic changes for validation (empty = disabled)",
@@ -2315,7 +2294,6 @@ def main() -> None:
         bootstrap_path=bootstrap_path,
         llm=llm,
         max_steps=args.max_steps,
-        allowed_commands=args.allowed_commands,
         ssh_validation_cmd=args.ssh_validation_cmd,
     )
 
